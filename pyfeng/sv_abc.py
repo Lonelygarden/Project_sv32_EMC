@@ -76,7 +76,11 @@ class SvABC(smile.OptSmileABC, abc.ABC):
         else:
             df_val = pd.read_excel(file, sheet_name=str(set_no))
             param = df_param.loc[set_no].to_dict()
-            args_model = {k: param[k] for k in param.keys() & {"sigma", "theta", "vov", "rho", "mr", "intr", "divr"}}
+            args_model = {
+                k: param[k]
+                for k in param.keys()
+                & {"sigma", "theta", "vov", "rho", "mr", "intr", "divr"}
+            }
             args_pricing = {k: param[k] for k in param.keys() & {"texp", "spot"}}
 
             assert df_val.columns[0] == "Strike"
@@ -104,6 +108,7 @@ class CondMcBsmABC(smile.OptSmileABC, abc.ABC):
     """
     Abstract Class for conditional Monte-Carlo method for BSM-based stochastic volatility models
     """
+
     var_process: bool = NotImplementedError
 
     dt = 0.05
@@ -166,7 +171,7 @@ class CondMcBsmABC(smile.OptSmileABC, abc.ABC):
     def rv_uniform(self, spawn=0):
         if self.antithetic:
             zz = self.rng_spawn[spawn].uniform(size=self.n_path // 2)
-            zz = np.stack([zz, 1-zz], axis=1).flatten()
+            zz = np.stack([zz, 1 - zz], axis=1).flatten()
         else:
             zz = self.rng_spawn[spawn].uniform(size=self.n_path)
         return zz
@@ -192,10 +197,14 @@ class CondMcBsmABC(smile.OptSmileABC, abc.ABC):
         if self.antithetic:
             # generate random number in the order of (path, time) first and transposed
             # in this way, the same paths are generated when increasing n_path
-            bm_incr = self.rng_spawn[0].standard_normal((int(n_path // 2), n_dt)).T * np.sqrt(dt[:, None])
+            bm_incr = self.rng_spawn[0].standard_normal(
+                (int(n_path // 2), n_dt)
+            ).T * np.sqrt(dt[:, None])
             bm_incr = np.stack([bm_incr, -bm_incr], axis=1).reshape((-1, n_path))
         else:
-            bm_incr = self.rng_spawn[0].standard_normal(n_path, n_dt).T * np.sqrt(dt[:, None])
+            bm_incr = self.rng_spawn[0].standard_normal(n_path, n_dt).T * np.sqrt(
+                dt[:, None]
+            )
 
         if cum:
             np.cumsum(bm_incr, axis=0, out=bm_incr)
@@ -218,7 +227,6 @@ class CondMcBsmABC(smile.OptSmileABC, abc.ABC):
         """
         return NotImplementedError
 
-
     def price(self, strike, spot, texp, cp=1):
 
         kk = strike / spot
@@ -228,7 +236,7 @@ class CondMcBsmABC(smile.OptSmileABC, abc.ABC):
         fwd_cond, sigma_cond = self.cond_spot_sigma(texp, self.sigma)
 
         fwd_mean = fwd_cond.mean()
-        self.result['spot error'] = fwd_mean - 1
+        self.result["spot error"] = fwd_mean - 1
         if self.correct_fwd:
             fwd_cond /= fwd_mean
 
@@ -261,7 +269,7 @@ class CondMcBsmABC(smile.OptSmileABC, abc.ABC):
         p = np.zeros_like(strike)
         var = self.return_var_realized(texp)
         for i, k in enumerate(strike):
-            p[i] = np.mean(np.fmax(np.sign(cp)*(var - k), 0))
+            p[i] = np.mean(np.fmax(np.sign(cp) * (var - k), 0))
         if scalar_output:
             p = p[0]
 
@@ -282,7 +290,7 @@ class CondMcBsmABC(smile.OptSmileABC, abc.ABC):
         return np.mean(var)
 
     def price_paths(self, tobs):
-        price = np.ones((len(tobs)+1, self.n_path))
+        price = np.ones((len(tobs) + 1, self.n_path))
         dt_arr = np.diff(np.atleast_1d(tobs), prepend=0)
         s_0 = np.full(self.n_path, self.sigma)
 
@@ -290,18 +298,20 @@ class CondMcBsmABC(smile.OptSmileABC, abc.ABC):
             spot, sigma = self.cond_spot_sigma(dt, s_0)
 
             xx = np.random.standard_normal(int(self.n_path // 2))
-            xx = np.array([xx, -xx]).flatten('F')
+            xx = np.array([xx, -xx]).flatten("F")
 
-            price[k+1, :] = spot * np.exp(sigma*np.sqrt(dt) * xx)
+            price[k + 1, :] = spot * np.exp(sigma * np.sqrt(dt) * xx)
 
         np.cumprod(price, axis=0, out=price)
 
         return price
 
+
 class SvMixtureABC(smile.OptSmileABC, abc.ABC):
     """
     Abstract Class for BS-mixture model for the BSM-based stochastic volatility models
     """
+
     var_process: bool = NotImplementedError
 
     correct_fwd = False
@@ -334,7 +344,7 @@ class SvMixtureABC(smile.OptSmileABC, abc.ABC):
         spot_cond, sigma_cond, ww = self.cond_spot_sigma(texp)
 
         spot_mean = np.sum(spot_cond * ww)
-        self.result['spot error'] = spot_mean - 1
+        self.result["spot error"] = spot_mean - 1
         if self.correct_fwd:
             spot_cond /= spot_mean
         assert np.isclose(np.sum(ww), 1)
