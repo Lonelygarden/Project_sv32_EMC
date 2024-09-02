@@ -273,13 +273,13 @@ class Sv32McBaldeaux2012Exact(Sv32McABC):
         def laplace_cond(bb):
             return self.cond_avgvar_laplace(bb, dt, var_0, var_t)
 
-        eps = 1e-5
-        val_up = laplace_cond(eps)
-        val_dn = laplace_cond(-eps)
-        m1 = (val_dn - val_up) / (2 * eps)
-        var = (val_dn + val_up - 2.0) / eps**2 - m1**2
-        # m1 = derivative(laplace_cond, 0, n=1, dx=1e-5, order=5)
-        # var = derivative(laplace_cond, 0, n=2, dx=1e-5, order=5) - m1**2
+        # eps = 1e-5
+        # val_up = laplace_cond(eps)
+        # val_dn = laplace_cond(-eps)
+        # m1 = (val_dn - val_up) / (2 * eps)
+        # var = (val_dn + val_up - 2.0) / eps**2 - m1**2
+        m1 = -derivative(laplace_cond, 0, n=1, dx=1e-5, order=5)
+        var = derivative(laplace_cond, 0, n=2, dx=1e-5, order=5) - m1**2
         ln_sig = np.sqrt(np.log(1 + var / m1**2))
 
         u_error = m1 + 5 * np.sqrt(np.fmax(var, 0))
@@ -393,27 +393,23 @@ class Sv32McChoiKwok2023Ig(Sv32McBaldeaux2012Exact):
         def cumgenfunc_cond(bb):
             return np.log(self.cond_avgvar_laplace(-bb, dt, var_0, var_t))
         
-        eps = 1e-8
-        val_1 = cumgenfunc_cond(-eps*2)
-        val_2 = cumgenfunc_cond(-eps*1)
-        val_3 = cumgenfunc_cond(0)
-        val_4 = cumgenfunc_cond(eps)
-        val_5 = cumgenfunc_cond(eps*2)
-        m1 = -(-val_5 + 8*val_4 - 8*val_2 + val_1) / (12 * eps)
-        m2 = (-val_5 + 16*val_4 - 30*val_3 + 16*val_2 - val_1) / (12 * eps**2)
-        m3 = -(-val_5 + 2*val_4 - 2*val_2 + val_1) / (2 * eps**3)
-        var = m2 - m1**2
-        skew = (m3 - 3*m1*m2 + 2*m1**3)/var**(3/2)
+        # eps = 1e-8
+        # val_1 = cumgenfunc_cond(-eps*2)
+        # val_2 = cumgenfunc_cond(-eps*1)
+        # val_3 = cumgenfunc_cond(0)
+        # val_4 = cumgenfunc_cond(eps)
+        # val_5 = cumgenfunc_cond(eps*2)
+        # m1 = -(-val_5 + 8*val_4 - 8*val_2 + val_1) / (12 * eps)
+        # m2 = (-val_5 + 16*val_4 - 30*val_3 + 16*val_2 - val_1) / (12 * eps**2)
+        # m3 = -(-val_5 + 2*val_4 - 2*val_2 + val_1) / (2 * eps**3)
+        # var = m2 - m1**2
+        # skew = (m3 - 3*m1*m2 + 2*m1**3)/var**(3/2)
 
-        # m1 = -derivative(cumgenfunc_cond, 0, n=1, dx=1e-10, order=5)
-        # var = derivative(cumgenfunc_cond, 0, n=2, dx=1e-10, order=5)-m1**2
-        # skew = -derivative(cumgenfunc_cond, 0, n=3, dx=1e-10, order=5)/np.sqrt(var)**3
+        m1 = -derivative(cumgenfunc_cond, 0, n=1, dx=1e-10, order=5)
+        var = derivative(cumgenfunc_cond, 0, n=2, dx=1e-10, order=5)-m1**2
+        skew = -derivative(cumgenfunc_cond, 0, n=3, dx=1e-10, order=5)/np.sqrt(var)**3
         
-        print(m1)
-        print(m2)
-        print(m3)
-        print(var)
-        print(skew)
+
         return m1, var, skew
 
     def cond_avgvar_mv_analytic(self, dt, var_0, var_t):

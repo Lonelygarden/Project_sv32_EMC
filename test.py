@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, "")
 sys.path.insert(
     sys.path.index("") + 1,
-    "D:\GitHUb\Project_sv32_EMC",
+    "C:/Users/27261/Desktop/3_Courses in PHBS/3_09_AppliedStochasticProcess/Project_sv32_EMC",
 )
 import pyfeng as pf
 import pyfeng.ex as pfex
@@ -71,7 +71,7 @@ iv_exact * 100
 # print(bias)
 
 
-# # Pricing with Exact Simulation
+# # # Pricing with Exact Simulation
 # m1 = pfex.Sv32McBaldeaux2012Exact(sigma, vov, rho, mr, theta, intr)
 # m1.set_num_params(n_path=10000, rn_seed=123456, dt=None)
 # m1.correct_fwd = False
