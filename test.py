@@ -25,8 +25,9 @@ np.set_printoptions(precision=4)
 # p_exact = 0.443059
 
 # Case II: Set 2 in Kouarfate et al. (2021)
-sigma, mr, theta, vov, rho = 0.06, 22.84, 0.218, 8.56, -0.99
+sigma, mr, theta, vov, rho = 0.06, 22.84, 0.218, 8.56, -0.1
 intr = 0
+
 strike, spot, texp = np.array([95, 100, 105]), 100, 0.5
 p_exact = np.array([10.364, 7.386, 4.938])
 iv_exact = pf.Bsm(1).impvol(p_exact, strike, spot, texp)
@@ -45,23 +46,48 @@ iv_exact * 100
 # # Case IV:
 # vov = 0.3
 # mr = 0.7
-# spot = 49  # asset price
-# texp = 0.1
+# spot = 49 # asset price
+# texp= 0.1
 # intr = 0
 # theta = 0.6
-# strike = np.array([47, 48, 49, 50, 51])  # strike price
-# sigma = 1  # sigma
-# rho = 0.5
-# p_exact = 0
+# strike = np.array([47, 48, 49, 50, 51]) # strike price 
+# sigma = 1 # sigma
+# rho= 0.5
+# p_exact = np.array([7.04, 6.5, 6.121,  5.7006, 5.305])
+
+# # Case V(near expiration only)
+# vov = 0.3
+# mr = 0.7
+# spot = 50 # asset price
+# texp= 0.1
+# intr = 0
+# theta = 0.6
+# strike = np.array([10, 20, 40]) # strike price 
+# sigma = 1 # sigma
+# rho= 0.5
+# p_exact = np.array([40, 30, 10])
 
 
-# # Pricing with time discretezation using Euler/Milstein scheme, Exact Stepping, Almost Exact Stepping
-# m = pfex.Sv32McTimeStep(sigma, vov, rho, mr, theta, intr)
-# m.set_num_params(n_path=1.6e5, dt=1 / 500, rn_seed=123456)
-# m.scheme = 1  # Euler/Milstein scheme, here dt should be small enough (dt=1/500 for Case I,III; not work well in Case II)
-# m.correct_fwd = False
-# bias = m.price(strike, spot, texp) - p_exact
-# print(bias)
+# # Case VI(atm only)
+# vov = 3.3
+# mr = 0.7
+# spot = 49 # asset price
+# texp= 1
+# intr = 0
+# theta = 0.6
+# strike = np.array([47, 48, 49, 50, 51]) # strike price 
+# sigma = 1 # sigma
+# rho= 0.5
+# p_exact = np.array([12.6802, 12.333, 11.999, 11.678, 11.37])
+
+
+# Pricing with time discretezation using Euler/Milstein scheme, Exact Stepping, Almost Exact Stepping
+m = pfex.Sv32McTimeStep(sigma, vov, rho, mr, theta, intr)
+m.set_num_params(n_path=1.6e5, dt=1 / 5000, rn_seed=123456)
+m.scheme = 1  # Euler/Milstein scheme, here dt should be small enough (dt=1/500 for Case I,III; not work well in Case II)
+m.correct_fwd = False
+bias = m.price(strike, spot, texp) #- p_exact
+print(bias)
 
 
 # # # Exact Stepping with 1 / NCX2
@@ -83,7 +109,7 @@ iv_exact * 100
 m2 = pfex.Sv32McChoiKwok2023Ig(sigma, vov, rho, mr, theta, intr)
 m2.set_num_params(n_path=100000, rn_seed=123456, dt=None)
 m2.correct_fwd = False
-bias = m2.price(strike, spot, texp) - p_exact
+bias = m2.price(strike, spot, texp) #- p_exact
 print(bias)  # Sometimes the deviation can touch 0.17
 
 

@@ -250,6 +250,9 @@ class Sv32McBaldeaux2012Exact(Sv32McABC):
         zz = phi / np.sqrt(var_0 * var_t)
 
         if eta is None:
+            # nu_bb = np.array(nu_bb, dtype=np.complex128)
+            # zz = np.array(zz, dtype=np.complex128)
+            # ret = spsp.iv(nu_bb, zz) / spsp.iv(nu, zz)
             ret = self.iv_complex(nu_bb, zz) / spsp.iv(nu, zz)
         else:
             nu_diff = 8 * bb / self.vov**2 / (nu_bb + nu)
@@ -280,10 +283,16 @@ class Sv32McBaldeaux2012Exact(Sv32McABC):
         # var = (val_dn + val_up - 2.0) / eps**2 - m1**2
         m1 = -derivative(laplace_cond, 0, n=1, dx=1e-5, order=5)
         var = derivative(laplace_cond, 0, n=2, dx=1e-5, order=5) - m1**2
+        ## Exclude the negative variances
+        # idx = (var > np.finfo(float).eps)
+        # avgvar = np.zeros_like(mean)
+        # mean = mean[idx]
+        # var = var[idx]
+        # skew = skew[idx]
         ln_sig = np.sqrt(np.log(1 + var / m1**2))
 
-        u_error = m1 + 5 * np.sqrt(np.fmax(var, 0))
-        h = np.pi / u_error
+        u_error = m1 + 12 * np.sqrt(np.fmax(var, 0))
+        h = np.pi / (2*u_error)
 
         # N = np.ones(self.n_path)
         # for i in range(self.n_path):
@@ -335,7 +344,7 @@ class Sv32McChoiKwok2023Ig(Sv32McBaldeaux2012Exact):
 
     dist = "ig"
 
-    def draw_from_mv(self, mean, var, skew, dist):
+    def draw_from_mv(self, mean, var, dist, skew=None,ifskew=None):
         """
         Draw RNs from distributions with mean and variance matched
         Args:
@@ -346,19 +355,29 @@ class Sv32McChoiKwok2023Ig(Sv32McBaldeaux2012Exact):
         Returns:
             RNs with size of mean/variance
         """
+        # Inverse Gaussian Distribution needs mean and variance are all positive
         idx = np.logical_and(mean > np.finfo(float).eps, var > np.finfo(float).eps)
         # idx = (mean > np.finfo(float).eps)
+        # idx = (var > np.finfo(float).eps)
         avgvar = np.zeros_like(mean)
         mean = mean[idx]
         var = var[idx]
-        skew = skew[idx]
-
+        if ifskew:
+            skew = skew[idx]
+            # Set skew to eps if skew==0, avoiding 3/skew is inf or -inf
+            skew[(skew == 0)] = np.finfo(float).eps
         if dist.lower() == "ig":
             # mu and lambda defined in https://en.wikipedia.org/wiki/Inverse_Gaussian_distribution
             # RNG.wald takes the same parameters
-            lam = (3 / skew)**2
-            eta = 3 * np.sqrt(var) / (mean*skew)
-            avgvar[idx] = (1-eta)*mean + eta*mean*self.rng_spawn[1].wald(mean=1, scale=lam)
+            if ifskew:
+                lam = (3 / skew)**2
+                eta = 3 * np.sqrt(var) / (mean*skew)
+                avgvar[idx] = (1-eta)*mean + eta*mean*self.rng_spawn[1].wald(mean=1, scale=lam)
+                avgvar[avgvar<0] = 0
+            else:
+                lam = mean**3 / var
+                avgvar[idx] = self.rng_spawn[1].wald(mean=mean, scale=lam)
+
 
         elif dist.lower() == "ga":
             scale = var / mean
@@ -391,23 +410,14 @@ class Sv32McChoiKwok2023Ig(Sv32McBaldeaux2012Exact):
 
         # conditional Cumulant Generating Fuction
         def cumgenfunc_cond(bb):
-            return np.log(self.cond_avgvar_laplace(-bb, dt, var_0, var_t))
-        
-        # eps = 1e-8
-        # val_1 = cumgenfunc_cond(-eps*2)
-        # val_2 = cumgenfunc_cond(-eps*1)
-        # val_3 = cumgenfunc_cond(0)
-        # val_4 = cumgenfunc_cond(eps)
-        # val_5 = cumgenfunc_cond(eps*2)
-        # m1 = -(-val_5 + 8*val_4 - 8*val_2 + val_1) / (12 * eps)
-        # m2 = (-val_5 + 16*val_4 - 30*val_3 + 16*val_2 - val_1) / (12 * eps**2)
-        # m3 = -(-val_5 + 2*val_4 - 2*val_2 + val_1) / (2 * eps**3)
-        # var = m2 - m1**2
-        # skew = (m3 - 3*m1*m2 + 2*m1**3)/var**(3/2)
+            # return np.log(self.cond_avgvar_laplace(-bb, dt, var_0, var_t))
+            return self.cond_avgvar_laplace(bb, dt, var_0, var_t)
 
-        m1 = -derivative(cumgenfunc_cond, 0, n=1, dx=1e-10, order=5)
-        var = derivative(cumgenfunc_cond, 0, n=2, dx=1e-10, order=5)-m1**2
-        skew = -derivative(cumgenfunc_cond, 0, n=3, dx=1e-10, order=5)/np.sqrt(var)**3
+        # m1 = derivative(cumgenfunc_cond, 0, n=1, dx=1e-5, order=5)
+        # var = derivative(cumgenfunc_cond, 0, n=2, dx=1e-5d, order=5)
+        m1 = -derivative(cumgenfunc_cond, 0, n=1, dx=1e-5, order=5)
+        var = derivative(cumgenfunc_cond, 0, n=2, dx=1e-5, order=5)-m1**2
+        skew = (-derivative(cumgenfunc_cond, 0, n=3, dx=1e-5, order=5)-3*m1*var+2*m1**3)/np.sqrt(var)**3
         
 
         return m1, var, skew
@@ -466,52 +476,53 @@ class Sv32McChoiKwok2023Ig(Sv32McBaldeaux2012Exact):
         )
         return m1, var
 
-    def cond_states_step_invlap(self, var_0, texp):
-        """
-        Sample variance at maturity and conditional integrated variance using Laplace transform
+    # ## This is a copy of Exact Method using inverse Laplace transformation
+    # def cond_states_step_invlap(self, var_0, texp):
+    #     """
+    #     Sample variance at maturity and conditional integrated variance using Laplace transform
 
-        Args:
-            texp: float, time to maturity
-        Returns:
-            tuple, variance at maturity and conditional integrated variance
-        """
+    #     Args:
+    #         texp: float, time to maturity
+    #     Returns:
+    #         tuple, variance at maturity and conditional integrated variance
+    #     """
 
-        # var_t, eta = self._m_heston.var_step_pois_gamma(texp, 1 / var_0)
-        var_t = self._m_heston.var_step_ncx2(1 / var_0, dt)
-        np.divide(1.0, var_t, out=var_t)
-        # print('eta', eta.min(), eta.mean(), eta.max())
+    #     # var_t, eta = self._m_heston.var_step_pois_gamma(texp, 1 / var_0)
+    #     var_t = self._m_heston.var_step_ncx2(1 / var_0, texp)
+    #     np.divide(1.0, var_t, out=var_t)
+    #     # print('eta', eta.min(), eta.mean(), eta.max())
 
-        def laplace_cond(bb):
-            return self.cond_avgvar_laplace(bb, texp, var_0, var_t, eta)
+    #     def laplace_cond(bb):
+    #         return self.cond_avgvar_laplace(bb, texp, var_0, var_t, eta)
 
-        eps = 1e-5
-        val_up = laplace_cond(eps)
-        val_dn = laplace_cond(-eps)
-        m1 = (val_dn - val_up) / (2 * eps)
-        var = (val_dn + val_up - 2.0) / eps**2 - m1**2
-        # print('m1', np.amin(m1), np.amax(m1))
-        # print('var', np.amin(var), np.amax(var), (var<0).mean())
-        std = np.sqrt(np.fmax(var, 0))
-        u_error = np.fmax(m1, 1e-6) + 5 * std
-        h = np.pi / u_error
-        # print('h', (h<0).sum())
-        N = 60
+    #     eps = 1e-5
+    #     val_up = laplace_cond(eps)
+    #     val_dn = laplace_cond(-eps)
+    #     m1 = (val_dn - val_up) / (2 * eps)
+    #     var = (val_dn + val_up - 2.0) / eps**2 - m1**2
+    #     # print('m1', np.amin(m1), np.amax(m1))
+    #     # print('var', np.amin(var), np.amax(var), (var<0).mean())
+    #     std = np.sqrt(np.fmax(var, 0))
+    #     u_error = np.fmax(m1, 1e-6) + 5 * std
+    #     h = np.pi / u_error
+    #     # print('h', (h<0).sum())
+    #     N = 60
 
-        # Store the value of characteristic function for each term in the summation when approximating the CDF
-        jj = np.arange(1, N + 1)[:, None]
-        phimat = laplace_cond(-1j * jj * h).real
+    #     # Store the value of characteristic function for each term in the summation when approximating the CDF
+    #     jj = np.arange(1, N + 1)[:, None]
+    #     phimat = laplace_cond(-1j * jj * h).real
 
-        # Sample the conditional integrated variance by inverse transform sampling
-        zz = self.rv_normal(spawn=0)
-        uu = spst.norm.cdf(zz)
+    #     # Sample the conditional integrated variance by inverse transform sampling
+    #     zz = self.rv_normal(spawn=0)
+    #     uu = spst.norm.cdf(zz)
 
-        def root(xx):
-            h_xx = h * xx
-            rv = h_xx + 2 * (phimat * np.sin(h_xx * jj) / jj).sum(axis=0) - uu * np.pi
-            return rv
+    #     def root(xx):
+    #         h_xx = h * xx
+    #         rv = h_xx + 2 * (phimat * np.sin(h_xx * jj) / jj).sum(axis=0) - uu * np.pi
+    #         return rv
 
-        avgvar = spop.newton(root, m1)
-        return var_t, avgvar
+    #     avgvar = spop.newton(root, m1)
+    #     return var_t, avgvar
 
     def cond_states_step(self, dt, var_0):
         """
@@ -533,8 +544,9 @@ class Sv32McChoiKwok2023Ig(Sv32McBaldeaux2012Exact):
         np.divide(1.0, var_t, out=var_t)
         m1, var, skew = self.cond_avgvar_mv_numeric(dt, var_0, var_t)
 
+        ## The different ways to calculate var_t and avgvar
         # m1, var = self.cond_avgvar_mv_analytic(dt, var_0, var_t)
-        avgvar = self.draw_from_mv(m1, var, skew, self.dist)
+        avgvar = self.draw_from_mv(m1, var, self.dist, skew=skew, ifskew=False)
         # var_t, avgvar = self.cond_states_step_invlap(var_0, dt)
 
         return var_t, avgvar
