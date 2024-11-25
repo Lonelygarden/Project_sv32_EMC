@@ -477,19 +477,21 @@ Since Almost Exact MC simulation inherits the most of methods of Exact MC, some 
 
       
 
-   Taylor expansion, or analytical derivative
+   Choi's Suggestion: Taylor expansion, or analytical derivative
 
-   
 
-   # 9.9-11.9 Task: Analytical Form of Derivatives of Laplace Transform
 
-   Needed: Taking derivative w.r.t. of $a^*$ 
-   
-   ![image-20240919145245627](C:\Users\27261\AppData\Roaming\Typora\typora-user-images\image-20240919145245627.png)
-   
-   This is the information of bessel function：https://functions.wolfram.com/Bessel-TypeFunctions/BesselI/ 
-   
-   
+
+
+# 11.25-12.30 Task: Analytical Form of Derivatives of Laplace Transform
+
+Needed: Taking derivative w.r.t. of $a^*$ 
+
+![image-20240919145245627](C:\Users\27261\AppData\Roaming\Typora\typora-user-images\image-20240919145245627.png)
+
+This is the information of bessel function：https://functions.wolfram.com/Bessel-TypeFunctions/BesselI/ 
+
+
 
 <img src="https://functions.wolfram.com/Bessel-TypeFunctions/BesselI/20/01/01/0001/MainEq1.gif" alt="img " style="zoom:300%;" />
 
@@ -498,6 +500,8 @@ Since Almost Exact MC simulation inherits the most of methods of Exact MC, some 
 <img src="https://functions.wolfram.com/Bessel-TypeFunctions/BesselI/17/02/01/0001/MainEq1.gif" alt="img " style="zoom:430%;" />
 
 https://mathworld.wolfram.com/ModifiedBesselFunctionoftheFirstKind.html introduce the basic ideas of Modified Bessel Function of the first kind.
+
+https://www.doubao.com/chat/341384283196674 The chat with Doubao.
 
 
 
