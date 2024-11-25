@@ -491,3 +491,17 @@ Since Almost Exact MC simulation inherits the most of methods of Exact MC, some 
    
    
 
+<img src="https://functions.wolfram.com/Bessel-TypeFunctions/BesselI/20/01/01/0001/MainEq1.gif" alt="img " style="zoom:300%;" />
+
+<img src="https://functions.wolfram.com/Bessel-TypeFunctions/BesselI/02/0001/MainEq1.gif" alt="img " style="zoom:300%;" />
+
+<img src="https://functions.wolfram.com/Bessel-TypeFunctions/BesselI/17/02/01/0001/MainEq1.gif" alt="img " style="zoom:430%;" />
+
+https://mathworld.wolfram.com/ModifiedBesselFunctionoftheFirstKind.html introduce the basic ideas of Modified Bessel Function of the first kind.
+
+
+
+![image-20241125222239540](C:\Users\27261\AppData\Roaming\Typora\typora-user-images\image-20241125222239540.png)
+
+That means I need  to truncate the summation of the digamma function.
+

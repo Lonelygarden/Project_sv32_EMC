@@ -275,14 +275,15 @@ class Sv32McBaldeaux2012Exact(Sv32McABC):
 
         def laplace_cond(bb):
             return self.cond_avgvar_laplace(bb, dt, var_0, var_t)
-
-        # eps = 1e-5
-        # val_up = laplace_cond(eps)
-        # val_dn = laplace_cond(-eps)
-        # m1 = (val_dn - val_up) / (2 * eps)
-        # var = (val_dn + val_up - 2.0) / eps**2 - m1**2
-        m1 = -derivative(laplace_cond, 0, n=1, dx=1e-5, order=5)
-        var = derivative(laplace_cond, 0, n=2, dx=1e-5, order=5) - m1**2
+        
+        # Using the numeric derivatives
+        # m1 = -derivative(laplace_cond, 0, n=1, dx=1e-5, order=5)
+        # var = derivative(laplace_cond, 0, n=2, dx=1e-5, order=5) - m1**2
+        
+        # Using the analytic derivatives
+        m1 = 
+        var = 
+        
         ## Exclude the negative variances
         # idx = (var > np.finfo(float).eps)
         # avgvar = np.zeros_like(mean)
