@@ -112,8 +112,6 @@ class CaseTimer:
         print(f"[{self.case_name}]: {self.case_dict[self.case_name]['description']} \n 运行耗时: {self.interval:.6f} 秒")
         
 
-import time
-
 def run_valuation(model_class, model_scheme, case_names, case_dict):
     print(f"\n{'='*10} 正在运行模型: {model_class.__name__} {'='*10}")
     
@@ -134,7 +132,7 @@ def run_valuation(model_class, model_scheme, case_names, case_dict):
         # 只有 Sv32McTimeStep 需要根据 Case 设置具体的 dt
         if model_class == pfex.Sv32McTimeStep:
             if case_name == "Case II":
-                dt = 1 / 5000
+                dt = 1 / 50000
             elif case_name == "Case VI":
                 dt = 1 / 50000
             else:
