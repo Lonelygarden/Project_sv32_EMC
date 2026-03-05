@@ -1,4 +1,5 @@
 import abc
+import math
 import numpy as np
 from . import sv_abc as sv
 from . import heston_mc
@@ -196,7 +197,7 @@ class Sv32McTimeStep(Sv32McABC):
     def cond_states_step(self, dt, var_0):
 
         if self.scheme < 2:
-            milstein = self.scheme == 1
+            milstein = (self.scheme == 1)
             # Euler (or Milstein) scheme
             var_t = self.var_step_euler(var_0, dt, milstein=milstein)
         elif self.scheme == 2:
@@ -263,6 +264,40 @@ class Sv32McBaldeaux2012Exact(Sv32McABC):
             )
 
         return ret
+    
+    def find_truncation_N(self, h: float, epsilon: float, Phi_func: callable)-> int:
+        """
+        计算截断项数 N
+        
+        参数:
+        h (float): 积分步长
+        epsilon (float): 允许的误差容忍度 (例如 1e-4)
+        Phi_func (callable): 特征函数 Φ(u)，输入实数 u，返回复数结果
+        
+        返回:
+        int: 满足条件的 N 值
+        """
+        # 计算右侧的阈值
+        threshold = (math.pi * epsilon) / 2.0
+        
+        j = 1
+        max_iter = 100  # 设置安全上限，防止特征函数收敛过慢导致死循环
+        
+        while j <= max_iter:
+            u = h * j
+            
+            # 计算特征函数 Φ(h*j)
+            phi_val = Phi_func(u)
+            
+            # 计算当前项的绝对值 |Φ(h*j)| / j
+            # 注意：phi_val 是复数，使用 abs() 计算其模长
+            term_value = abs(phi_val) / j
+            
+            # 判断是否满足论文中的截断条件
+            if term_value.all() < threshold:
+                return j
+            j += 1
+        return max_iter
 
     def draw_cond_avgvar(self, dt, var_0, var_t):
         """
@@ -277,12 +312,12 @@ class Sv32McBaldeaux2012Exact(Sv32McABC):
             return self.cond_avgvar_laplace(bb, dt, var_0, var_t)
         
         # Using the numeric derivatives
-        # m1 = -derivative(laplace_cond, 0, n=1, dx=1e-5, order=5)
-        # var = derivative(laplace_cond, 0, n=2, dx=1e-5, order=5) - m1**2
+        m1 = -derivative(laplace_cond, 0, n=1, dx=1e-5, order=5)
+        var = derivative(laplace_cond, 0, n=2, dx=1e-5, order=5) - m1**2
         
         # Using the analytic derivatives
-        m1 = 
-        var = 
+        # m1 = 
+        # var = 
         
         ## Exclude the negative variances
         # idx = (var > np.finfo(float).eps)
@@ -303,7 +338,7 @@ class Sv32McBaldeaux2012Exact(Sv32McABC):
         #    N[i] = int(spop.brentq(Nfun, 0, 1000)) + 1
         # N = N.max()
         # print(N)
-        N = 60
+        N = self.find_truncation_N(h, 1e-4, laplace_cond)
 
         # Store the value of characteristic function for each term in the summation when approximating the CDF
         jj = np.arange(1, N + 1)[:, None]
@@ -477,53 +512,53 @@ class Sv32McChoiKwok2023Ig(Sv32McBaldeaux2012Exact):
         )
         return m1, var
 
-    # ## This is a copy of Exact Method using inverse Laplace transformation
-    # def cond_states_step_invlap(self, var_0, texp):
-    #     """
-    #     Sample variance at maturity and conditional integrated variance using Laplace transform
+    ## This is a copy of Exact Method using inverse Laplace transformation
+    def cond_states_step_invlap(self, var_0, texp):
+        """
+        Sample variance at maturity and conditional integrated variance using Laplace transform
 
-    #     Args:
-    #         texp: float, time to maturity
-    #     Returns:
-    #         tuple, variance at maturity and conditional integrated variance
-    #     """
+        Args:
+            texp: float, time to maturity
+        Returns:
+            tuple, variance at maturity and conditional integrated variance
+        """
 
-    #     # var_t, eta = self._m_heston.var_step_pois_gamma(texp, 1 / var_0)
-    #     var_t = self._m_heston.var_step_ncx2(1 / var_0, texp)
-    #     np.divide(1.0, var_t, out=var_t)
-    #     # print('eta', eta.min(), eta.mean(), eta.max())
+        # var_t, eta = self._m_heston.var_step_pois_gamma(texp, 1 / var_0)
+        var_t = self._m_heston.var_step_ncx2(1 / var_0, texp)
+        np.divide(1.0, var_t, out=var_t)
+        # print('eta', eta.min(), eta.mean(), eta.max())
 
-    #     def laplace_cond(bb):
-    #         return self.cond_avgvar_laplace(bb, texp, var_0, var_t, eta)
+        def laplace_cond(bb):
+            return self.cond_avgvar_laplace(bb, texp, var_0, var_t, eta)
 
-    #     eps = 1e-5
-    #     val_up = laplace_cond(eps)
-    #     val_dn = laplace_cond(-eps)
-    #     m1 = (val_dn - val_up) / (2 * eps)
-    #     var = (val_dn + val_up - 2.0) / eps**2 - m1**2
-    #     # print('m1', np.amin(m1), np.amax(m1))
-    #     # print('var', np.amin(var), np.amax(var), (var<0).mean())
-    #     std = np.sqrt(np.fmax(var, 0))
-    #     u_error = np.fmax(m1, 1e-6) + 5 * std
-    #     h = np.pi / u_error
-    #     # print('h', (h<0).sum())
-    #     N = 60
+        eps = 1e-5
+        val_up = laplace_cond(eps)
+        val_dn = laplace_cond(-eps)
+        m1 = (val_dn - val_up) / (2 * eps)
+        var = (val_dn + val_up - 2.0) / eps**2 - m1**2
+        # print('m1', np.amin(m1), np.amax(m1))
+        # print('var', np.amin(var), np.amax(var), (var<0).mean())
+        std = np.sqrt(np.fmax(var, 0))
+        u_error = np.fmax(m1, 1e-6) + 5 * std
+        h = np.pi / u_error
+        # print('h', (h<0).sum())
+        N = 60
 
-    #     # Store the value of characteristic function for each term in the summation when approximating the CDF
-    #     jj = np.arange(1, N + 1)[:, None]
-    #     phimat = laplace_cond(-1j * jj * h).real
+        # Store the value of characteristic function for each term in the summation when approximating the CDF
+        jj = np.arange(1, N + 1)[:, None]
+        phimat = laplace_cond(-1j * jj * h).real
 
-    #     # Sample the conditional integrated variance by inverse transform sampling
-    #     zz = self.rv_normal(spawn=0)
-    #     uu = spst.norm.cdf(zz)
+        # Sample the conditional integrated variance by inverse transform sampling
+        zz = self.rv_normal(spawn=0)
+        uu = spst.norm.cdf(zz)
 
-    #     def root(xx):
-    #         h_xx = h * xx
-    #         rv = h_xx + 2 * (phimat * np.sin(h_xx * jj) / jj).sum(axis=0) - uu * np.pi
-    #         return rv
+        def root(xx):
+            h_xx = h * xx
+            rv = h_xx + 2 * (phimat * np.sin(h_xx * jj) / jj).sum(axis=0) - uu * np.pi
+            return rv
 
-    #     avgvar = spop.newton(root, m1)
-    #     return var_t, avgvar
+        avgvar = spop.newton(root, m1)
+        return var_t, avgvar
 
     def cond_states_step(self, dt, var_0):
         """
