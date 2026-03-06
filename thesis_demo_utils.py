@@ -96,6 +96,19 @@ case_dict = {
         "p_exact": np.array([11.7235, 8.9978, 6.7091]),
         "description": "Lewis AL (2000) Option valuation under stochastic volatility: with Mathematica code. Finance Press",
     },
+    "Case VIII": {
+        "sigma": 1,
+        "vov": 3.3,
+        "rho": 0.9,
+        "mr": 12.0,
+        "theta": 0.6,
+        "intr": 0.0,
+        "texp": 1,
+        "strike": np.array([47, 48, 49, 50, 51]),
+        "spot": 49,
+        "p_exact": np.array([0.0, 0.0, 0.0, 0.0, 0.0]),
+        "description": "atm only",
+    }
 }
 
 class CaseTimer:
