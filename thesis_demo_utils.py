@@ -16,7 +16,7 @@ case_dict = {
         "strike": 1.0,
         "spot": 1.0,
         "p_exact": 0.443059,
-        "description": "Eq. (4.2) in Baldeaux (2012)",
+        "description": "Eq. (4.2) in Baldeaux (2012), ATM",
     },
     "Case II": {
         "sigma": 0.06,
@@ -29,7 +29,7 @@ case_dict = {
         "strike": np.array([95, 100, 105]),
         "spot": 100.0,
         "p_exact": np.array([10.364, 7.386, 4.938]),
-        "description": "Set 2 in Kouarfate et al. (2021)",
+        "description": "Set 2 in Kouarfate et al. (2021), ATM",
     },
     "Case III": {
         "sigma": 0.06,
@@ -42,7 +42,7 @@ case_dict = {
         "strike": np.array([95, 100, 105]),
         "spot": 100.0,
         "p_exact": np.array([11.724, 8.999, 6.710]),
-        "description": "in Kouarfate et al. (2021)",
+        "description": "in Kouarfate et al. (2021), ATM",
     },
     "Case IV": {
         "sigma": 1,
@@ -96,19 +96,6 @@ case_dict = {
         "p_exact": np.array([11.7235, 8.9978, 6.7091]),
         "description": "Lewis AL (2000) Option valuation under stochastic volatility: with Mathematica code. Finance Press",
     },
-    "Case VIII": {
-        "sigma": 1,
-        "vov": 3.3,
-        "rho": 0.9,
-        "mr": 12.0,
-        "theta": 0.6,
-        "intr": 0.0,
-        "texp": 1,
-        "strike": np.array([47, 48, 49, 50, 51]),
-        "spot": 49,
-        "p_exact": np.array([0.0, 0.0, 0.0, 0.0, 0.0]),
-        "description": "atm only",
-    }
 }
 
 class CaseTimer:
@@ -145,11 +132,11 @@ def run_valuation(model_class, model_scheme, case_names, case_dict):
         # 只有 Sv32McTimeStep 需要根据 Case 设置具体的 dt
         if model_class == pfex.Sv32McTimeStep:
             if case_name == "Case II":
-                dt = 1 / 50000
+                dt = 1 / 5000
             elif case_name == "Case VI":
-                dt = 1 / 50000
+                dt = 1 / 5000
             else:
-                dt = 1 / 500
+                dt = 1 / 5000
         else:
             # 其他模型（如解析解模型或其它蒙特卡洛模型）dt 设为 None
             dt = None

@@ -210,6 +210,9 @@ class Sv32McTimeStep(Sv32McABC):
             # Draw final variance after dt from Poison-Gamma distribution
             var_t, _ = self._m_heston.var_step_pois_gamma(dt, 1 / var_0)
             np.divide(1.0, var_t, out=var_t)
+        elif self.scheme == 4:
+            # QE method
+            var_t, _ = self._m_heston.var_step_qe(dt, 1/var_0)
         else:
             raise ValueError(f"Invalid scheme: {self.scheme}")
 
