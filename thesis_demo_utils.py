@@ -45,7 +45,7 @@ case_dict = {
         "description": "in Kouarfate et al. (2021), ATM",
     },
     "Case IV": {
-        "sigma": 1,
+        "sigma": 1.0,
         "vov": 0.3,
         "rho": 0.5,
         "mr": 0.7,
@@ -58,7 +58,7 @@ case_dict = {
         "description": "Near expiration and atm",
     },
     "Case V": {
-        "sigma": 1,
+        "sigma": 1.0,
         "vov": 0.3,
         "rho": 0.5,
         "mr": 0.7,
@@ -71,7 +71,7 @@ case_dict = {
         "description": "Near expiration only",
     },
     "Case VI": {
-        "sigma": 1,
+        "sigma": 1.0,
         "vov": 3.3,
         "rho": 0.5,
         "mr": 0.7,
@@ -142,7 +142,7 @@ def run_valuation(model_class, model_scheme, case_names, case_dict):
             dt = None
             
         # 3. 配置参数
-        if model_class == pf.sv_fft.Sv32Fft:
+        if model_class == pf.sv_fft.Sv32Fft or model_class == pf.sv_fft.Sv32FourierCos:
             pass
         else:
             m.set_num_params(n_path=1.6e5, dt=dt, rn_seed=123456)

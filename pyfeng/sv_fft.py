@@ -11,6 +11,7 @@ from . import opt_smile_abc as smile
 from . import ousv
 from . import heston
 from . import rheston
+import mpmath
 
 
 class FftABC(opt.OptABC, abc.ABC):
@@ -626,7 +627,7 @@ class Sv32Fft(sv.SvABC, FftABC):
 
         return ret
 
-    def mgf_logprice(self, uu, texp):
+    def mgf_logprice(self, xx, texp):
         """
         Log price MGF under the 3/2 SV model from Lewis (2000) or Carr & Sun (2007).
 
@@ -638,8 +639,8 @@ class Sv32Fft(sv.SvABC, FftABC):
         """
         vov2 = self.vov**2
 
-        mu = 0.5 + (self.mr - uu*self.rho*self.vov)/vov2
-        c_tilde = uu*(1 - uu)/vov2
+        mu = 0.5 + (self.mr - xx*self.rho*self.vov)/vov2
+        c_tilde = xx*(1 - xx)/vov2
         delta = np.sqrt(mu**2 + c_tilde)
         alpha = -mu + delta
         beta = 1 + 2*delta
@@ -650,6 +651,121 @@ class Sv32Fft(sv.SvABC, FftABC):
         #ret = spsp.gamma(beta - alpha) * spsp.rgamma(beta) * np.power(XX, alpha) * self.hyp1f1_complex(alpha, beta, -XX)
         # we use log version because of large argument of np.exp()
         expo = np.clip(spsp.loggamma(beta - alpha) - spsp.loggamma(beta) + alpha*np.log(XX), -self.expo_max, self.expo_max)
+        ret = np.exp(expo) * self.hyp1f1_complex(alpha, beta, -XX)
+
+        return ret
+    
+    
+class FourierCosABC(opt.OptABC, abc.ABC):
+    """
+    Fourier-Cosine (COS) Expansion Method for Option Pricing.
+    Reference: Fang, F., & Oosterlee, C. W. (2008). 
+    A novel pricing method for European options based on Fourier-cosine series expansions.
+    """
+    n_x = 2**11   # COS 方法收敛极快，通常 256 或 512 个网格点就足够了，不需要 FFT 的 4096
+    L = 24.0     # 积分截断区间 [-L, L]。针对 log(S/F)，12 足够覆盖绝大多数极端的 3/2 模型场景
+
+    @abc.abstractmethod
+    def mgf_logprice(self, xx, texp):
+        """
+        Moment generating function (MGF) of log price. (forward = 1)
+        """
+        return NotImplementedError
+
+    def charfunc_logprice(self, x, texp):
+        """
+        Characteristic function of log price
+        """
+        return self.mgf_logprice(1j * x, texp)
+
+    def price(self, strike, spot, texp, cp=1):
+        fwd, df, divf = self._fwd_factor(spot, texp)
+
+        kk = strike / fwd
+        is_scalar = np.isscalar(kk)
+        log_kk = np.atleast_1d(np.log(kk))
+        strike_arr = np.atleast_1d(strike)
+
+        # 定义 COS 积分截断域 [a, b]
+        a = -self.L
+        b = self.L
+
+        k_vec = np.arange(self.n_x)
+        omega = k_vec * np.pi / (b - a)
+
+        # 获取特征函数值 (注意: COS方法中直接使用实轴上的特征函数, 规避了复平面奇点)
+        cf_vals = self.charfunc_logprice(omega, texp)
+
+        # 核心公式: Re{ phi(u) * exp(-i * k * pi * a / (b - a)) }
+        real_term = (cf_vals * np.exp(-1j * omega * a)).real
+        real_term[0] *= 0.5  # COS 展开项中，第一项的系数需要减半 (Σ' 符号)
+
+        prices = np.zeros_like(log_kk, dtype=float)
+
+        for i, k_val in enumerate(log_kk):
+            # 看涨期权的积分下限 c = log(K/F), 上限 d = b
+            c = k_val
+            d = b
+
+            # 如果行权价超出了截断域右边界，期权深度虚值，价值为0
+            if c >= d:
+                prices[i] = 0.0
+                continue
+
+            # 计算闭式积分系数 chi_k
+            chi = (np.exp(d) * (np.cos(omega * (d - a)) + omega * np.sin(omega * (d - a))) -
+                   np.exp(c) * (np.cos(omega * (c - a)) + omega * np.sin(omega * (c - a)))) / (1 + omega**2)
+
+            # 计算闭式积分系数 psi_k
+            psi = np.zeros_like(omega)
+            psi[0] = d - c
+            psi[1:] = (np.sin(omega[1:] * (d - a)) - np.sin(omega[1:] * (c - a))) / omega[1:]
+
+            # 组装 V_k 系数 (Call Option)
+            V_k = 2.0 / (b - a) * (fwd * chi - strike_arr[i] * psi)
+
+            # 级数求和
+            prices[i] = df * np.sum(real_term * V_k)
+
+        # 如果是看跌期权 (cp == -1)，通过 Call-Put Parity 转换
+        # Put = Call - DF * (Fwd - Strike)
+        if cp == -1:
+            prices = prices - df * (fwd - strike_arr)
+
+        return prices[0] if is_scalar else prices
+
+
+_hyp1f1_vec = np.vectorize(lambda a, b, z: complex(mpmath.hyp1f1(a, b, z)))
+class Sv32FourierCos(sv.SvABC, FourierCosABC):
+    """
+    3/2 model option pricing with Fourier-Cosine (COS) Expansion
+    """
+
+    expo_max = np.log(np.finfo(np.float32).max)
+
+    @staticmethod
+    def hyp1f1_complex(a, b, x):
+        """Confluent hypergeometric function 1F1"""
+        return _hyp1f1_vec(a, b, x)
+
+    def mgf_logprice(self, xx, texp):
+        """
+        Log price MGF under the 3/2 SV model.
+        """
+        vov2 = self.vov**2
+
+        mu = 0.5 + (self.mr - xx*self.rho*self.vov)/vov2
+        c_tilde = xx*(1 - xx)/vov2
+        delta = np.sqrt(mu**2 + c_tilde)
+        alpha = -mu + delta
+        beta = 1 + 2*delta
+
+        mr_new = self.mr * self.theta
+        XX = 2*mr_new/(self.vov**2 * self.sigma)/(np.exp(mr_new * texp) - 1)
+
+        expo = np.clip(spsp.loggamma(beta - alpha) - spsp.loggamma(beta) + alpha*np.log(XX), -self.expo_max, self.expo_max)
+        
+        # 现在这里调用的是 mpmath 的高精度算法，无论 XX 多大都不会溢出
         ret = np.exp(expo) * self.hyp1f1_complex(alpha, beta, -XX)
 
         return ret

@@ -325,88 +325,21 @@ class Sv32McBaldeaux2012Exact(Sv32McABC):
         phi, _ = self._m_heston.phi_exp(dt)
         nu = self._m_heston.chi_dim() / 2 - 1
         nu_bb = np.sqrt(nu**2)
-        zz = phi / np.sqrt(1/var_0 * 1/var_t)
+        zz = phi / np.sqrt(var_0 * var_t)
         derivative1_of_numerator, derivative2_of_numerator = self.iv_d12(nu = nu_bb, zz = zz)
         denominator = self.iv_complex(nu, zz)
-        derivative1 = 4.0/self.vov**2 / np.sqrt(nu**2) * derivative1_of_numerator /denominator # 4.0/self.vov**2 / nu
-        derivative2 = -32.0/(self.vov**4 * np.sqrt(nu**2)** 3) * derivative2_of_numerator /denominator # -32.0/(self.vov**4 * nu** 3)
+        f_prime = derivative1_of_numerator / denominator
+        f_double_prime = derivative2_of_numerator / denominator
+        p_prime = 4.0 / (self.vov**2 * nu_bb)
+        p_double_prime = -16.0 / (self.vov**4 * (nu_bb**3))
+        derivative1 = -(f_prime * p_prime) 
+
+        # E[I^2] = L''(0) = f''(p) * (p'(0))^2 + f'(p) * p''(0)
+        derivative2 = f_double_prime * (p_prime**2) + f_prime * p_double_prime
         m1 = derivative1
         var = derivative2 - m1**2
         return m1, var
     
-    def get_32_moments_conditional(self, v0, vt, T):
-        """
-        计算 3/2 模型中 \int_0^T v_s ds 的条件期望和方差
-        已知起始方差 v0 和 终点方差 vt。
-        
-        逻辑：
-        1. 令 x = 1/v，则 x 遵循 CIR 过程
-        2. 计算 I = \int (1/x_s) ds 的条件矩
-        """
-        
-        # --- 1. 参数映射 ---
-        # 根据 3/2 模型到 CIR 的变换：dx_t = (kappa + eps^2 - kappa*theta*x_t)dt - eps*sqrt(x_t)dZ_t
-        # 映射到标准 CIR 参数: dX = a(b - X)dt + sigma*sqrt(X)dW
-        x0 = 1.0 / v0
-        xt = 1.0 / vt
-        
-        # 对应你图片公式中的 nu 和 z
-        # nu = delta/2 - 1
-        nu = (2.0 * self.mr * self.theta) / (self.vov**2) - 1.0
-        
-        # 计算 z = j * sqrt(x0 * xt) / sinh(j * T / 2)
-        # 这里的 j 对应漂移项系数
-        j_coeff = self.mr * self.theta
-        z = (j_coeff * np.sqrt(x0 * xt)) / np.sinh(j_coeff * T)
-        
-        # --- 2. 级数求导计算 (Bessel I_p(z) w.r.t p) ---
-        # 初始化级数项，使用对数空间防止溢出
-        log_p0 = nu * np.log(z / 2.0) - gammaln(nu + 1.0)
-        p0 = np.exp(log_p0)
-        
-        psi_0 = digamma(nu + 1.0)
-        psi_1 = polygamma(1, nu + 1.0) # Trigamma
-        log_m_psi0 = np.log(z / 2.0) - psi_0
-        
-        iv0 = p0 # I_nu(z)
-        iv1 = log_m_psi0 * p0 # dI/dp
-        iv2 = (log_m_psi0**2 - psi_1) * p0 # d2I/dp2
-        
-        zh2 = (z / 2.0)**2
-        for k in range(1, 100):
-            # 递归更新各项系数
-            ratio = zh2 / (k * (k + nu))
-            p0 *= ratio
-            log_m_psi0 -= 1.0 / (nu + k)
-            psi_1 -= 1.0 / (nu + k)**2
-            
-            iv0 += p0
-            iv1 += log_m_psi0 * p0
-            iv2 += (log_m_psi0**2 - psi_1) * p0
-            
-            # if np.abs(p0).any() < 1e-15 * np.abs(iv0):
-            #     break
-                
-        # 计算对数导数 (比值形式更稳定)
-        dlnI_dp = iv1 / iv0
-        d2I_dp2_over_I = iv2 / iv0
-        
-        # --- 3. 链式法则映射到 Laplace 参数 a* ---
-        # p(a*) = sqrt(nu^2 + 8*a*/eps^2)
-        # p'(0) = 4 / (eps^2 * nu)
-        # p''(0) = -32 / (eps^4 * nu^3)
-        p_prime = 4.0 / (self.vov**2 * nu)
-        p_double_prime = -32.0 / (self.vov**4 * nu**3)
-        
-        # 期望 E[I] = -L'(0)
-        # L(a) = I_p(a)(z) / I_nu(z)
-        exp_I = -(dlnI_dp * p_prime)
-        
-        # 二阶矩 E[I^2] = L''(0)
-        # L'' = (d2I/dp2 / I) * (p')^2 + (dI/dp / I) * p''
-        moment2_I = d2I_dp2_over_I * (p_prime**2) + dlnI_dp * p_double_prime
-        variance_I = moment2_I - exp_I**2
-        return exp_I, variance_I
 
     def draw_cond_avgvar(self, dt, var_0, var_t):
         """
@@ -564,54 +497,8 @@ class Sv32McChoiKwok2023Ig(Sv32McBaldeaux2012Exact):
         m1 = -derivative(cumgenfunc_cond, 0, n=1, dx=1e-5, order=5)
         var = derivative(cumgenfunc_cond, 0, n=2, dx=1e-5, order=5)-m1**2
         skew = (-derivative(cumgenfunc_cond, 0, n=3, dx=1e-5, order=5)-3*m1*var+2*m1**3)/np.sqrt(var)**3
-        
-
+    
         return m1, var, skew
-        """
-        Sample variance at maturity and conditional integrated variance using Laplace transform
-
-        Args:
-            texp: float, time to maturity
-        Returns:
-            tuple, variance at maturity and conditional integrated variance
-        """
-
-        # var_t, eta = self._m_heston.var_step_pois_gamma(texp, 1 / var_0)
-        var_t = self._m_heston.var_step_ncx2(1 / var_0, texp)
-        np.divide(1.0, var_t, out=var_t)
-        # print('eta', eta.min(), eta.mean(), eta.max())
-
-        def laplace_cond(bb):
-            return self.cond_avgvar_laplace(bb, texp, var_0, var_t, eta)
-
-        eps = 1e-5
-        val_up = laplace_cond(eps)
-        val_dn = laplace_cond(-eps)
-        m1 = (val_dn - val_up) / (2 * eps)
-        var = (val_dn + val_up - 2.0) / eps**2 - m1**2
-        # print('m1', np.amin(m1), np.amax(m1))
-        # print('var', np.amin(var), np.amax(var), (var<0).mean())
-        std = np.sqrt(np.fmax(var, 0))
-        u_error = np.fmax(m1, 1e-6) + 5 * std
-        h = np.pi / u_error
-        # print('h', (h<0).sum())
-        N = 60
-
-        # Store the value of characteristic function for each term in the summation when approximating the CDF
-        jj = np.arange(1, N + 1)[:, None]
-        phimat = laplace_cond(-1j * jj * h).real
-
-        # Sample the conditional integrated variance by inverse transform sampling
-        zz = self.rv_normal(spawn=0)
-        uu = spst.norm.cdf(zz)
-
-        def root(xx):
-            h_xx = h * xx
-            rv = h_xx + 2 * (phimat * np.sin(h_xx * jj) / jj).sum(axis=0) - uu * np.pi
-            return rv
-
-        avgvar = spop.newton(root, m1)
-        return var_t, avgvar
 
     def cond_states_step(self, dt, var_0):
         """
@@ -625,17 +512,17 @@ class Sv32McChoiKwok2023Ig(Sv32McBaldeaux2012Exact):
         Returns:
             (var_t, avgvar)
         """
-        if self.dist == "ig":
+        if self.dist == "ig" or self.dist == "ln":
             var_t = self._m_heston.var_step_ncx2(dt, 1 / var_0)
         elif self.dist == "ga":
             var_t, _ = self._m_heston.var_step_pois_gamma(1 / var_0, dt)
-
+            
         np.divide(1.0, var_t, out=var_t)
-        m1, var, skew = self.cond_avgvar_mv_analytic(dt, var_0, var_t)
-
+        np.divide(1.0, var_0, out=var_0)
         ## The different ways to calculate var_t and avgvar
-        # m1, var = self.cond_avgvar_mv_analytic(dt, var_0, var_t)
-        avgvar = self.draw_from_mean_var(m1, var, self.dist, skew=skew, ifskew=False)
+        m1_analytic, var_analytic = self.cond_avgvar_mv_analytic(dt, var_0, var_t)
+        # m1_numeric, var_numeric, skew_numeric = self.cond_avgvar_mv_numeric(dt, var_0, var_t)
+        avgvar = self.draw_from_mean_var(m1_analytic, var_analytic, self.dist, skew=None, ifskew=False)
         # var_t, avgvar = self.cond_states_step_invlap(var_0, dt)
 
         return var_t, avgvar
