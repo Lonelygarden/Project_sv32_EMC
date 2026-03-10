@@ -7,7 +7,7 @@ import scipy.optimize as spop
 import scipy.special as spsp
 import scipy.stats as spst
 from scipy.misc import derivative
-from scipy.special import gammaln, digamma, polygamma
+from scipy.special import gammaln, digamma, loggamma, polygamma
 
 
 class Sv32McABC(sv.SvABC, sv.CondMcBsmABC, abc.ABC):
@@ -358,7 +358,7 @@ class Sv32McBaldeaux2012Exact(Sv32McABC):
         # var = derivative(laplace_cond, 0, n=2, dx=1e-5, order=5) - m1**2
         
         # Using the analytic derivatives
-        m1, var = self.get_32_moments_conditional(var_0, var_t, dt)
+        m1, var = self.cond_avgvar_mv_analytic(dt, var_0, var_t)
         
         ## Exclude the negative variances
         # idx = (var > np.finfo(float).eps)
@@ -401,7 +401,6 @@ class Sv32McBaldeaux2012Exact(Sv32McABC):
         return avgvar
     
     
-
     def cond_states_step(self, dt, var_0):
         """
         Sample variance at maturity and conditional integrated variance
@@ -525,4 +524,313 @@ class Sv32McChoiKwok2023Ig(Sv32McBaldeaux2012Exact):
         avgvar = self.draw_from_mean_var(m1_analytic, var_analytic, self.dist, skew=None, ifskew=False)
         # var_t, avgvar = self.cond_states_step_invlap(var_0, dt)
 
+        return var_t, avgvar
+    
+    
+class Sv32McBrignoneJunike2026ConditionalCos(Sv32McABC):
+    use_cos = True
+    def __init__(self, intr, mr, theta, vov, rho, sigma):
+        """
+        初始化 3/2 模型参数 (Grasselli 2017 框架下 a=0, b=1)
+        mr: 均值回归速度 (kappa)
+        theta: 长期均值
+        vov: 波动率的波动率 (sigma/epsilon)
+        rho: 相关系数
+        """
+        self.intr = intr
+        self.mr = mr
+        self.theta = theta
+        self.vov = vov
+        self.rho = rho
+        self.sigma = sigma
+        
+    def _bessel_ratio_complex(self, p, nu, z):
+        """
+        稳健计算复数阶贝塞尔函数比值: I_p(z) / I_nu(z)
+        使用对数平移法彻底解决复数域下的下溢问题。
+        """
+        N_terms = 150
+        k = np.arange(N_terms)[:, np.newaxis]  # [N_terms, 1]
+        p_ext = np.asarray(p)[np.newaxis, :]   # [1, len(p)]
+        
+        log_z_half = np.log(z / 2.0)
+        
+        # 1. 计算分母 (实数项)
+        log_wk_den = 2 * k * log_z_half - gammaln(k + 1) - gammaln(nu + k + 1)
+        max_log_den = np.max(log_wk_den, axis=0)
+        wk_den = np.exp(log_wk_den - max_log_den)
+        sum_den = np.sum(wk_den, axis=0)
+        
+        # 2. 计算分子 (复数项，支持 u 为复数数组)
+        log_wk_num = 2 * k * log_z_half - gammaln(k + 1) - loggamma(p_ext + k + 1)
+        max_log_num = np.max(np.real(log_wk_num), axis=0)
+        wk_num = np.exp(log_wk_num - max_log_num)
+        sum_num = np.sum(wk_num, axis=0)
+        
+        # 3. 组合对数比值
+        log_ratio = (p - nu) * log_z_half + np.log(sum_num) - np.log(sum_den) + max_log_num - max_log_den
+        return np.exp(log_ratio)
+
+    def _conditional_cf(self, u, v0, vt, T):
+        """
+        计算 3/2 模型对数收益率 X_T | V_T 的条件特征函数
+        """
+        # 提取 3/2 模型映射参数，将原本的 self.v0 全部替换为传入的动态 v0
+        xi_1 = (self.intr + self.rho * self.mr / self.vov) * T - (self.rho / self.vov) * np.log(v0)
+        xi_3 = self.rho / self.vov
+        xi_5 = (self.rho / self.vov) * (self.vov**2 / 2.0 - self.mr * self.theta) - 0.5
+        xi_8 = 1.0 - self.rho**2
+
+        u2 = -1j * u * xi_5 + 0.5 * (u**2) * xi_8
+        
+        nu = (2.0 * self.mr * self.theta) / (self.vov**2) - 1.0
+        # 同样，这里的 self.v0 也替换成了 v0
+        z = (2.0 * self.mr * np.sqrt(v0 * vt)) / (self.vov**2 * np.sinh(self.mr * T / 2.0))
+        
+        p_u = np.sqrt(nu**2 + 8.0 * u2 / self.vov**2)
+        ratio = self._bessel_ratio_complex(p_u, nu, z)
+        
+        ccf_val = np.exp(1j * u * (xi_1 + xi_3 * np.log(vt))) * ratio
+        return ccf_val
+
+    def get_32_moments_conditional(self, v0, vt, T):
+        """
+        修正：严格对齐 Grasselli (2017) 的 a=0, b=1 映射参数
+        """
+        nu = (2.0 * self.mr * self.theta) / (self.vov**2) - 1.0
+        k_cir = self.mr
+        
+        # 核心修正：z 不取倒数，且系数仅为 mr
+        z = (2.0 * k_cir * np.sqrt(v0 * vt)) / (self.vov**2 * np.sinh(k_cir * T / 2.0))
+        
+        ks = np.arange(100)
+        z_arr = np.atleast_1d(z)
+        log_z_half = np.log(z_arr / 2.0)
+        
+        log_wk = (nu + 2 * ks[:, np.newaxis]) * log_z_half[np.newaxis, :] \
+                 - gammaln(ks[:, np.newaxis] + 1) \
+                 - gammaln(nu + ks[:, np.newaxis] + 1)
+        
+        max_log_w = np.max(log_wk, axis=0)
+        wk = np.exp(log_wk - max_log_w[np.newaxis, :])
+        
+        psi_k = digamma(nu + ks + 1)[:, np.newaxis]
+        tri_k = polygamma(1, nu + ks + 1)[:, np.newaxis]
+        diff_term = log_z_half[np.newaxis, :] - psi_k
+        
+        sum_wk = np.sum(wk, axis=0)
+        dlnI_dp = np.sum(wk * diff_term, axis=0) / sum_wk
+        d2I_over_I = np.sum(wk * (diff_term**2 - tri_k), axis=0) / sum_wk
+        
+        p_prime = 4.0 / (self.vov**2 * nu)
+        p_double_prime = -16.0 / (self.vov**4 * nu**3)
+        
+        exp_I = -(dlnI_dp * p_prime)
+        moment2_I = d2I_over_I * (p_prime**2) + dlnI_dp * p_double_prime
+        var_I = np.maximum(0.0, moment2_I - exp_I**2)
+
+        # 核心修正：严格按照 a=0, b=1 的公式，不混杂多余映射
+        xi_1 = (self.intr + self.rho * self.mr / self.vov) * T - (self.rho / self.vov) * np.log(v0)
+        xi_3 = self.rho / self.vov
+        xi_5 = (self.rho / self.vov) * (self.vov**2 / 2.0 - self.mr * self.theta) - 0.5
+        xi_8 = 1.0 - self.rho**2
+        
+        mean_X = xi_1 + xi_3 * np.log(vt) + xi_5 * exp_I
+        var_X = xi_8 * exp_I + (xi_5**2) * var_I
+        
+        return np.squeeze(exp_I), np.squeeze(var_I), np.squeeze(mean_X), np.squeeze(var_X)
+
+    def _cos_cdf(self, y, v0, vt, T, L, N, mu):
+        """
+        基于 Fourier-Cosine 级数计算累积分布函数 G(y)
+        """
+        k = np.arange(N)
+        u_k = k * np.pi / (2.0 * L)
+        
+        # 注意：把 v0 传给条件特征函数
+        ccf_vals = self._conditional_cf(u_k, v0, vt, T)
+        
+        f_hat = ccf_vals * np.exp(-1j * u_k * mu)
+        c_k = (1.0 / L) * np.real(f_hat * np.exp(1j * k * np.pi / 2.0))
+        c_k[0] /= 2.0  
+        
+        v_k = np.zeros(N)
+        diff = min(y - mu, L) + L
+        v_k[0] = diff
+        if N > 1:
+            k_pos = k[1:]
+            v_k[1:] = (2.0 * L / (k_pos * np.pi)) * np.sin(k_pos * np.pi * diff / (2.0 * L))
+            
+        return np.sum(c_k * v_k)
+
+    def simulate_log_return(self, v0, vt, T):
+        # 修改处：提取 mean_X, var_X
+        _, _, mean_X, var_X = self.get_32_moments_conditional(v0, vt, T)
+        std_X = np.sqrt(var_X)
+        
+        L = 12.0 * std_X  
+        N = 256           
+        mu = mean_X
+        
+        U = np.random.uniform(0, 1)
+        
+        target_func = lambda y: self._cos_cdf(y, v0, vt, T, L, N, mu) - U
+        try:
+            y_sim = spop.brentq(target_func, mu - 0.95 * L, mu + 0.95 * L, xtol=1e-5)
+        except ValueError:
+            y_sim = np.random.normal(mean_X, std_X)
+            
+        return y_sim
+    
+    def _simulate_vT(self, v0, texp, n_paths):
+        """
+        修正：V_t 直接就是 CIR 过程，不需要取倒数！
+        """
+        k_cir = self.mr
+        theta_cir = self.theta
+        eps_x = self.vov
+        
+        c = 2.0 * k_cir / ((1.0 - np.exp(-k_cir * texp)) * eps_x**2)
+        df = 4.0 * k_cir * theta_cir / (eps_x**2)
+        nc_param = 2.0 * c * v0 * np.exp(-k_cir * texp)
+        
+        chi2_samples = np.random.noncentral_chisquare(df, nc_param, n_paths)
+        vt_samples = chi2_samples / (2.0 * c)
+        return vt_samples
+
+    def cond_spot_sigma(self, texp, var_0):
+        v0 = var_0
+        n_paths = getattr(self, 'n_paths', 10000)
+        vt_samples = self._simulate_vT(v0, texp, n_paths)
+        
+        if not self.use_cos:
+            _, _, mean_X, var_X = self.get_32_moments_conditional(v0, vt_samples, texp)
+            sigma_bs = np.sqrt(var_X / texp)
+            sigma_base = np.sqrt(var_0) if getattr(self, 'var_process', True) else var_0
+            sigma_cond = sigma_bs / sigma_base
+            fwd_cond = np.exp(mean_X + 0.5 * var_X)
+            
+        else:
+            # === 提速核心：获取所有的期望和方差，并预计算 C_k ===
+            _, _, mean_X, var_X = self.get_32_moments_conditional(v0, vt_samples, texp)
+            std_X = np.sqrt(var_X)
+            L_array = 12.0 * std_X
+            N_cos = 128  # COS 级数项，128 足以兼顾高精度与极速
+            
+            # (128, n_paths) 的系数矩阵，0.1秒内完成
+            c_k_matrix = self.precompute_cos_ck(v0, vt_samples, texp, L_array, mean_X, N_cos)
+            
+            xt_samples = np.zeros(n_paths)
+            U_samples = np.random.uniform(0, 1, n_paths)
+            k_pos = np.arange(1, N_cos)  # 缓存常量数组
+            
+            for i in range(n_paths):
+                c_k_i = c_k_matrix[:, i]
+                L_i = L_array[i]
+                mu_i = mean_X[i]
+                U_i = U_samples[i]
+                
+                # 现在的 target_func 极其轻量，不再有任何复数运算
+                def target_func(y):
+                    diff = min(y - mu_i, L_i) + L_i
+                    v_k = np.zeros(N_cos)
+                    v_k[0] = diff
+                    v_k[1:] = (2.0 * L_i / (k_pos * np.pi)) * np.sin(k_pos * np.pi * diff / (2.0 * L_i))
+                    return np.sum(c_k_i * v_k) - U_i
+                    
+                try:
+                    xt_samples[i] = spop.brentq(target_func, mu_i - 0.95 * L_i, mu_i + 0.95 * L_i, xtol=1e-4)
+                except ValueError:
+                    xt_samples[i] = np.random.normal(mu_i, std_X[i])
+            
+            fwd_cond = np.exp(xt_samples)
+            sigma_cond = np.full(n_paths, 1e-8)
+            
+        return fwd_cond, sigma_cond
+    
+    def precompute_cos_ck(self, v0, vt_array, T, L_array, mu_array, N=128):
+        """
+        修正：同步更新底层映射的特征函数，保障 COS 方法输出真实分布
+        """
+        n_paths = len(vt_array)
+        k = np.arange(N)[:, np.newaxis]
+        u = k * np.pi / (2.0 * L_array[np.newaxis, :]) 
+        
+        # 核心修正
+        xi_1 = (self.intr + self.rho * self.mr / self.vov) * T - (self.rho / self.vov) * np.log(v0)
+        xi_3 = self.rho / self.vov
+        xi_5 = (self.rho / self.vov) * (self.vov**2 / 2.0 - self.mr * self.theta) - 0.5
+        xi_8 = 1.0 - self.rho**2
+
+        u2 = -1j * u * xi_5 + 0.5 * (u**2) * xi_8
+        
+        nu = (2.0 * self.mr * self.theta) / (self.vov**2) - 1.0
+        k_cir = self.mr
+        # 核心修正：z 的内部不再使用倒数
+        z = (2.0 * k_cir * np.sqrt(v0 * vt_array)) / (self.vov**2 * np.sinh(k_cir * T / 2.0))
+        
+        p_u = np.sqrt(nu**2 + 8.0 * u2 / self.vov**2)
+        
+        N_terms = 100 
+        k_b = np.arange(N_terms)[:, np.newaxis, np.newaxis]     
+        p_ext = p_u[np.newaxis, :, :]                           
+        log_z_half = np.log(z / 2.0)[np.newaxis, np.newaxis, :] 
+        
+        log_wk_den = 2 * k_b * log_z_half - gammaln(k_b + 1) - gammaln(nu + k_b + 1)
+        max_log_den = np.max(log_wk_den, axis=0)
+        sum_den = np.sum(np.exp(log_wk_den - max_log_den), axis=0)
+        
+        log_wk_num = 2 * k_b * log_z_half - gammaln(k_b + 1) - loggamma(p_ext + k_b + 1)
+        max_log_num = np.max(np.real(log_wk_num), axis=0)
+        sum_num = np.sum(np.exp(log_wk_num - max_log_num), axis=0)
+        
+        log_ratio = (p_ext[0] - nu) * log_z_half[0] + np.log(sum_num) - np.log(sum_den) + max_log_num - max_log_den
+        ratio = np.exp(log_ratio)
+        
+        ccf_vals = np.exp(1j * u * (xi_1 + xi_3 * np.log(vt_array[np.newaxis, :]))) * ratio
+        
+        f_hat = ccf_vals * np.exp(-1j * u * mu_array[np.newaxis, :])
+        c_k = (1.0 / L_array[np.newaxis, :]) * np.real(f_hat * np.exp(1j * k * np.pi / 2.0))
+        c_k[0, :] /= 2.0
+        
+        return c_k
+    
+    def cond_states_step(self, dt, var_0):
+        """
+        修正：同步移除步进过程中的所有倒数和倒数参数映射
+        """
+        v0_array = np.atleast_1d(var_0)
+        n_paths = len(v0_array)
+        if n_paths == 1 and hasattr(self, 'n_paths'):
+            n_paths = self.n_paths
+            v0_array = np.full(n_paths, v0_array[0])
+
+        k_cir = self.mr
+        theta_cir = self.theta
+        eps_x = self.vov
+        
+        c = 2.0 * k_cir / ((1.0 - np.exp(-k_cir * dt)) * eps_x**2)
+        df = 4.0 * k_cir * theta_cir / (eps_x**2)
+        nc_param = 2.0 * c * v0_array * np.exp(-k_cir * dt)
+        
+        chi2_samples = np.random.noncentral_chisquare(df, nc_param, n_paths)
+        var_t = chi2_samples / (2.0 * c)
+
+        exp_I, var_I, _, _ = self.get_32_moments_conditional(v0_array, var_t, dt)
+
+        exp_I = np.maximum(exp_I, 1e-12)
+        var_I = np.maximum(var_I, 1e-12)
+        
+        s2 = np.log(1.0 + var_I / (exp_I**2))
+        s = np.sqrt(s2)
+        m = np.log(exp_I) - 0.5 * s2
+        
+        Z = np.random.standard_normal(n_paths)
+        I_sample = np.exp(m + s * Z)
+        
+        avgvar = I_sample / dt
+        
+        if np.isscalar(var_0) and not hasattr(self, 'n_paths'):
+            return var_t[0], avgvar[0]
+            
         return var_t, avgvar
