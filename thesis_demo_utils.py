@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import time
 from contextlib import ContextDecorator
 import pyfeng as pf
@@ -80,7 +81,7 @@ case_dict = {
         "texp": 1,
         "strike": np.array([47, 48, 49, 50, 51]),
         "spot": 49,
-        "p_exact": np.array([12.6802, 12.333, 11.999, 11.678, 11.37]),
+        "p_exact": np.array([12.7376, 12.3901, 12.0562, 11.7356, 11.4273]),
         "description": "atm only",
     },
     "Case VII": {
@@ -112,7 +113,7 @@ class CaseTimer:
         print(f"[{self.case_name}]: {self.case_dict[self.case_name]['description']} \n 运行耗时: {self.interval:.6f} 秒")
         
 
-def run_valuation(model_class, model_scheme, case_names, case_dict):
+def run_valuation(model_class, model_scheme, case_names, case_dict, dt=None):
     print(f"\n{'='*10} 正在运行模型: {model_class.__name__} {'='*10}")
     
     for case_name in case_names:
@@ -131,12 +132,7 @@ def run_valuation(model_class, model_scheme, case_names, case_dict):
         # 2. 差异化设置 dt
         # 只有 Sv32McTimeStep 需要根据 Case 设置具体的 dt
         if model_class == pfex.Sv32McTimeStep:
-            if case_name == "Case II":
-                dt = 1 / 5000
-            elif case_name == "Case VI":
-                dt = 1 / 5000
-            else:
-                dt = 1 / 5000
+            dt = dt if dt is not None else 1/500
         else:
             # 其他模型（如解析解模型或其它蒙特卡洛模型）dt 设为 None
             dt = None
