@@ -9,7 +9,7 @@ from openpyxl.styles import Alignment
 import pyfeng as pf
 import pyfeng.ex as pfex
 
-
+# Feller条件 2*mr*theta > 0.5*vov^2
 case_dict = {
     "Case I": {
         "sigma": 1.0,
