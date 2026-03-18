@@ -1,124 +1,81 @@
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
-from scipy.stats import norm
 import time
 
-# 锁定物理参数
-FIXED_KAPPA = 127.0590
-FIXED_THETA = 0.163960
-
-# ==========================================
-# 1. 稳定的向量化蒙特卡洛定价器 (专门克制末日期权)
-# ==========================================
-def bs_price_normalized(M, T, r, iv, opt_type):
-    d1 = (np.log(1.0 / M) + (r + 0.5 * iv**2) * T) / (iv * np.sqrt(T))
-    d2 = d1 - iv * np.sqrt(T)
-    if opt_type == 'C':
-        return norm.cdf(d1) - M * np.exp(-r * T) * norm.cdf(d2)
-    else:
-        return M * np.exp(-r * T) * norm.cdf(-d2) - norm.cdf(-d1)
-
-def three_halves_mc_pricer_normalized(M_array, type_array, T, r, V0, kappa, theta, sigma, rho, Z_v_mat, Z_x_mat):
-    num_paths, num_steps = Z_v_mat.shape
-    dt = T / num_steps
+def medvedev_scaillet_jump_iv(X_array, atm_iv, vov, rho, jump_vol, T):
+    """
+    完全版 Medvedev & Scaillet (2007) 公式 (含跳跃曲率项)
+    jump_vol = \lambda * E[|\Delta J|] (年化跳跃绝对强度)
+    """
+    # 1. 扩散倾斜项 (Diffusion Skew)
+    coef_X = (vov * rho / 4.0) * atm_iv
     
-    S = np.ones(num_paths) 
-    V = np.full(num_paths, V0)
+    # 2. 扩散曲率项 (Diffusion Curvature)
+    diff_curv = (vov**2 * atm_iv / 48.0) * (2.0 - rho**2)
     
-    for i in range(num_steps):
-        Z_v = Z_v_mat[:, i]
-        Z_x = Z_x_mat[:, i]
-        Z_s = rho * Z_v + np.sqrt(1.0 - rho**2) * Z_x
-        
-        V_pos = np.maximum(V, 1e-8) 
-        
-        S = S * np.exp((r - 0.5 * V_pos) * dt + np.sqrt(V_pos * dt) * Z_s)
-        V = V + kappa * V_pos * (theta - V_pos) * dt + sigma * (V_pos**1.5) * np.sqrt(dt) * Z_v
-        
-    discount_factor = np.exp(-r * T)
-    model_prices = np.zeros(len(M_array))
+    # 3. 💥 跳跃曲率项 (Jump Curvature - 论文 Eq 24 精华)
+    # 当 T 很小时，这一项主导了整个微笑曲线的陡峭程度
+    jump_curv = (np.sqrt(2 * np.pi) / 4.0) * (jump_vol / (atm_iv**2 * np.sqrt(T)))
     
-    for idx, (M, opt_type) in enumerate(zip(M_array, type_array)):
-        if opt_type == 'C':
-            payoff = np.maximum(S - M, 0.0)
-        else:
-            payoff = np.maximum(M - S, 0.0)
-        model_prices[idx] = np.mean(payoff) * discount_factor
-        
-    return model_prices
+    # 总曲率
+    coef_X2 = diff_curv + jump_curv
+    
+    return atm_iv - coef_X * X_array + coef_X2 * (X_array**2)
 
-# ==========================================
-# 2. 目标函数 (相对价格误差)
-# ==========================================
-def objective_2_params_mc(params, fixed_V0, M_array, type_array, T, r, market_prices, Z_v_mat, Z_x_mat):
-    vov, rho = params
+def objective_ms_jump(params, X_array, market_ivs, atm_iv, T):
+    vov, rho, jump_vol = params
     
     # 物理边界保护
-    if vov <= 0.01 or vov > 20.0 or rho < -1.0 or rho > 1.0:
+    # jump_vol 必须 >= 0
+    if vov <= 0.01 or vov > 15.0 or rho < -0.999 or rho > 0.999 or jump_vol < 0.0:
         return 1e10
+        
+    model_ivs = medvedev_scaillet_jump_iv(X_array, atm_iv, vov, rho, jump_vol, T)
     
-    # 调用稳定的 MC 定价器
-    m_prices = three_halves_mc_pricer_normalized(
-        M_array, type_array, T, r, fixed_V0, FIXED_KAPPA, FIXED_THETA, vov, rho, Z_v_mat, Z_x_mat
-    )
-    
-    # 相对价格误差
-    residuals = (m_prices - market_prices) / (market_prices + 1e-5)
-    mse = np.sum(residuals**2)
-    
-    print(f"试探: VoV={vov:.4f}, Rho={rho:.4f} => MSE: {mse:.4f}")
-    return mse
+    # IV 空间 MSE
+    return np.mean((model_ivs - market_ivs)**2)
 
-# ==========================================
-# 3. 执行校准
-# ==========================================
-def run_stage_calibration_mc(stage_name, csv_filepath):
-    print(f"\n[{stage_name}] 开始极速 MC 校准...")
+def run_ms_jump_calibration(stage_name, csv_filepath):
+    print(f"\n[{stage_name}] 启动 Jump-Diffusion 渐近校准...")
     try:
         df = pd.read_csv(csv_filepath)
     except FileNotFoundError:
         print(f"❌ 找不到文件: {csv_filepath}")
         return
-        
-    M_array = df['Moneyness'].values
-    type_array = df['Type'].values
-    iv_array = df['iv'].values / 100.0 if df['iv'].mean() > 5 else df['iv'].values
-    T, r = df['T'].iloc[0], 0.0
+
+    r = 0.0
+    T = df['T'].iloc[0]
+    df['X'] = -np.log(df['Moneyness']) + r * T
     
-    # 1. 提取 ATM IV 锁定瞬时方差 V0
-    atm_idx = np.abs(M_array - 1.0).argmin()
-    atm_iv = iv_array[atm_idx]
-    fixed_V0 = atm_iv**2
+    atm_idx = np.abs(df['X']).argmin()
+    atm_iv = df['iv'].iloc[atm_idx] / 100.0 if df['iv'].mean() > 5 else df['iv'].iloc[atm_idx]
     
-    # 2. 获取市场归一化基准价格
-    market_prices = np.array([bs_price_normalized(M, T, r, iv, t) for M, iv, t in zip(M_array, iv_array, type_array)])
+    # 扩大一点 X 的范围，让跳跃产生的尾部特征更明显
+    df_filtered = df[(df['X'] >= -0.08) & (df['X'] <= 0.08)].copy()
     
-    # 3. 预先生成随机矩阵 (锁定随机种子保证平滑梯度)
-    # 因为只有 2 个参数，我们可以放大 paths 保证精度，而不会太慢
-    np.random.seed(123456)
-    num_paths = 30000 
-    num_steps = 500    # 末日期权 T 极小，20 步足够了
-    Z_v_mat = np.random.standard_normal((num_paths, num_steps))
-    Z_x_mat = np.random.standard_normal((num_paths, num_steps))
+    X_array = df_filtered['X'].values
+    market_ivs = df_filtered['iv'].values / 100.0 if df_filtered['iv'].mean() > 5 else df_filtered['iv'].values
     
-    # 4. 执行 2 维寻优
-    initial_guess = [1.5, -0.5]
+    # 拟合 3 个核心自由度: [vov, rho, jump_vol]
+    initial_guess = [2.0, -0.5, 0.5]
+    bounds = [(0.1, 20.0), (-0.95, 0.95), (0.001, 20.0)]
     
     start = time.time()
     res = minimize(
-        objective_2_params_mc, 
+        objective_ms_jump, 
         initial_guess, 
-        args=(fixed_V0, M_array, type_array, T, r, market_prices, Z_v_mat, Z_x_mat), 
-        method='Nelder-Mead', # 核心修改：换成无梯度单纯形法
-        options={'xatol': 1e-4, 'fatol': 1e-4, 'maxiter': 2000} # 调整单纯形的收敛精度
+        args=(X_array, market_ivs, atm_iv, T), 
+        method='L-BFGS-B',
+        bounds=bounds
     )
     
     if res.success:
-        vov, rho = res.x
-        print(f"✅ 校准成功！耗时: {time.time() - start:.3f} 秒")
-        print(f"🔒 锚定 -> V0: {fixed_V0:.4f} (IV:{atm_iv*100:.1f}%), Kappa: {FIXED_KAPPA:.2f}, Theta: {FIXED_THETA:.4f}")
-        print(f"🎯 拟合 -> VoV: {vov:.4f}, Rho: {rho:.4f}")
+        vov, rho, jump_vol = res.x
+        print(f"✅ 校准成功！耗时: {time.time() - start:.5f} 秒")
+        print(f"🔒 锚定 -> ATM IV: {atm_iv*100:.2f}%")
+        print(f"🎯 扩散项 -> VoV: {vov:.4f}, Rho: {rho:.4f}")
+        print(f"🎯 跳跃项 -> Jump Vol: {jump_vol:.4f}")
     else:
-        print("❌ 优化未完全收敛，但最后参数为:")
-        print(f"🎯 拟合 -> VoV: {res.x[0]:.4f}, Rho: {res.x[1]:.4f}")
+        print("❌ 优化失败")
+
