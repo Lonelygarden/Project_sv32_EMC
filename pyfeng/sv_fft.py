@@ -13,6 +13,7 @@ from . import heston
 from . import rheston
 import mpmath
 
+_hyp1f1_vec = np.vectorize(lambda a, b, z: complex(mpmath.hyp1f1(a, b, z)))
 
 class FftABC(opt.OptABC, abc.ABC):
     n_x = 2**12  # number of grid. power of 2 for FFT
@@ -618,14 +619,15 @@ class Sv32Fft(sv.SvABC, FftABC):
         References:
             - https://docs.scipy.org/doc/scipy/reference/generated/scipy.special.hyp1f1.html#scipy.special.hyp1f1
         """
-        inc = a / b * x
-        ret = 1 + inc
+        return _hyp1f1_vec(a, b, x)
+        # inc = a / b * x
+        # ret = 1 + inc
 
-        for kk in np.arange(1, 1024):
-            inc *= (a + kk) / (b + kk) / (kk + 1) * x
-            ret += inc
+        # for kk in np.arange(1, 1024):
+        #     inc *= (a + kk) / (b + kk) / (kk + 1) * x
+        #     ret += inc
 
-        return ret
+        # return ret
 
     def mgf_logprice(self, xx, texp):
         """
@@ -735,7 +737,7 @@ class FourierCosABC(opt.OptABC, abc.ABC):
         return prices[0] if is_scalar else prices
 
 
-_hyp1f1_vec = np.vectorize(lambda a, b, z: complex(mpmath.hyp1f1(a, b, z)))
+
 class Sv32FourierCos(sv.SvABC, FourierCosABC):
     """
     3/2 model option pricing with Fourier-Cosine (COS) Expansion
