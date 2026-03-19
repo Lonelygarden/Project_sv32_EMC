@@ -117,7 +117,48 @@ class CaseTimer:
         self.interval = self.end - self.start
         print(f"[{self.case_name}]: {self.case_dict[self.case_name]['description']} \n 运行耗时: {self.interval:.6f} 秒")
         
+
+def run_valuation_single_model(model_class, model_scheme, case_names, case_dict, dt=None):
+    print(f"\n{'='*10} 正在运行模型: {model_class.__name__} {'='*10}")
+    
+    for case_name in case_names:
+        case = case_dict[case_name]
         
+        # 1. 统一初始化模型
+        m = model_class(
+            sigma=case["sigma"],
+            vov=case["vov"],
+            rho=case["rho"],
+            mr=case["mr"],
+            theta=case["theta"],
+            intr=case["intr"],
+        )
+        
+        # 2. 差异化设置 dt
+        # 只有 Sv32McTimeStep 需要根据 Case 设置具体的 dt
+        if model_class == pfex.Sv32McTimeStep:
+            dt = dt if dt is not None else 1/500
+        else:
+            # 其他模型（如解析解模型或其它蒙特卡洛模型）dt 设为 None
+            dt = None
+            
+        # 3. 配置参数
+        if model_class == pf.sv_fft.Sv32Fft or model_class == pf.sv_fft.Sv32FourierCos:
+            pass
+        else:
+            m.set_num_params(n_path=1.6e5, dt=dt, rn_seed=123456)
+            m.scheme = model_scheme
+            m.correct_fwd = False
+        
+        # 4. 使用之前定义的 CaseTimer 计时
+        with CaseTimer(case_name=case_name, case_dict=case_dict):
+            strike, spot, texp, p_exact = case['strike'], case['spot'], case['texp'], case['p_exact']
+            bias = m.price(strike, spot, texp) - p_exact
+            print(f"Bias: {bias} | dt: {dt}")
+        
+        print("-" * 30)
+
+
 def run_valuation(model_class, model_scheme, scheme_name, case_names, case_dict, results_dict, dt=None, add_dt_to_index=False):
     print(f"\n{'='*10} 正在运行模型: {model_class.__name__} - {scheme_name} {'='*10}")
     
