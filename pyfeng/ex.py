@@ -2,7 +2,7 @@
 
 # SV models (CMC, AE) from ASP 2021
 from .heston_mixture import HestonMixture
-from .sv32_mc2 import Sv32McTimeStep, Sv32McBaldeaux2012Exact, Sv32McChoiKwok2023Ig, Sv32McBrignoneJunike2026ConditionalCos
+from .sv32_mc2 import Sv32McTimeStep, Sv32McBaldeaux2012Exact, Sv32McChoiKwok2023Ig, Sv32McBrignoneJunike2026ConditionalCos, Sv32JumpMc
 from .subord_bm import VarGammaQuad, ExpNigQuad
 from .sv_fft import RoughHestonFft, Sv32Fft
 

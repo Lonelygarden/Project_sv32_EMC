@@ -1,5 +1,6 @@
 import abc
 import math
+import mpmath
 import numpy as np
 from . import sv_abc as sv
 from . import heston_mc
@@ -9,6 +10,7 @@ import scipy.stats as spst
 from scipy.misc import derivative
 from scipy.special import gammaln, digamma, loggamma, polygamma
 
+_hyp1f1_vec = np.vectorize(lambda a, b, z: complex(mpmath.hyp1f1(a, b, z)))
 
 class Sv32McABC(sv.SvABC, sv.CondMcBsmABC, abc.ABC):
     model_type = "3/2"
@@ -834,3 +836,261 @@ class Sv32McBrignoneJunike2026ConditionalCos(Sv32McABC):
             return var_t[0], avgvar[0]
             
         return var_t, avgvar
+    
+    
+class Sv32JumpMc(Sv32McABC):
+    """
+    3/2 plus Jumps 模型（论文核心模型）
+    跳仅存在于标的指数，方差为纯3/2扩散，跳幅度对数正态分布，泊松过程驱动跳
+    模型参数：
+        基础3/2参数：sigma(初始波动率), vov(方差波动率), mr(均值回归速度kappa), rho(价-方差相关), theta(长期方差)
+        跳参数：lam(泊松跳率lambda), mu_j(跳幅度对数均值mu), sigma_j(跳幅度对数方差sigma)
+        市场参数：intr(无风险利率), divr(股息率), is_fwd(是否为远期价格)
+    """
+    model_type = "3/2_jump"
+    scheme = 2  # 方差用精确NCX2模拟（论文Lemma5.1）
+
+    def __init__(self, sigma, vov, mr, rho, theta, lam, mu_j, sigma_j, intr=0.0, divr=0.0, is_fwd=False):
+        super().__init__(sigma=sigma, vov=vov, mr=mr, rho=rho, theta=theta, intr=intr, divr=divr, is_fwd=is_fwd)
+        # 跳参数（论文3.1节）
+        self.lam = lam  # 泊松跳率λ
+        self.mu_j = mu_j  # 跳幅度对数均值μ
+        self.sigma_j = sigma_j  # 跳幅度对数方差σ²
+        # 有效跳均值（论文3.1节：μ=log(1+μ̄)-σ²/2 → μ̄=exp(μ+σ²/2)-1）
+        self.mu_bar = np.exp(self.mu_j + 0.5 * self.sigma_j**2) - 1
+        # 校验鞅性条件（论文Proposition3.1：κ-ερ ≥ -ε²/2，ε=vov）
+        self._check_martingale_condition()
+        # 初始化随机数生成器
+        self.rng_poisson = np.random.default_rng(seed=self.rn_seed) if self.rn_seed else np.random.default_rng()
+        self.rng_jump = np.random.default_rng(seed=self.rn_seed+1) if self.rn_seed else np.random.default_rng()
+
+    def _check_martingale_condition(self):
+        """校验折现股价的鞅性条件（论文Proposition3.1）"""
+        lhs = self.mr - self.vov * self.rho
+        rhs = -0.5 * self.vov**2
+        if lhs < rhs - 1e-8:
+            raise ValueError(f"鞅性条件不满足：κ-ερ={lhs:.6f} < -ε²/2={rhs:.6f}，请调整参数")
+        print(f"鞅性条件校验通过：κ-ερ={lhs:.6f} ≥ -ε²/2={rhs:.6f}")
+
+    def var_step_ncx2(self, dt, var_0):
+        """3/2方差的精确模拟（论文Lemma5.1：方差的逆为CIR过程，非中心卡方分布）"""
+        var_0_inv = 1.0 / var_0
+        var_t_inv = self._m_heston.var_step_ncx2(dt, var_0_inv)
+        var_t = 1.0 / var_t_inv
+        var_t[var_t < 1e-16] = 1e-16  # 方差非负
+        return var_t
+
+    def _jump_simulation(self, dt, n_path):
+        """模拟泊松跳：跳次数+跳幅度（论文3.1节，跳仅作用于标的价格）"""
+        # 泊松分布模拟跳次数N(t)~Poisson(λ*dt)
+        n_jump = self.rng_poisson.poisson(lam=self.lam * dt, size=n_path)
+        # 对数正态分布模拟跳幅度：ln(跳幅度)~N(mu_j, sigma_j²)
+        jump_size = np.exp(self.mu_j + self.sigma_j * self.rng_jump.normal(size=(n_path, np.max(n_jump))))
+        # 计算单路径总跳幅度（无跳则为1）
+        total_jump = np.ones(n_path)
+        for i in range(n_path):
+            if n_jump[i] > 0:
+                total_jump[i] = np.prod(jump_size[i, :n_jump[i]])
+        return total_jump, n_jump
+
+    def cond_states_step(self, dt, var_0):
+        """
+        带跳3/2的状态步进：方差（纯3/2）+ 平均方差 + 标的价格跳
+        论文3.1节公式3.1-3.4，标的价格=扩散部分*跳部分
+        """
+        n_path = len(var_0) if isinstance(var_0, np.ndarray) else self.n_path
+        if isinstance(var_0, (int, float)):
+            var_0 = np.full(n_path, var_0)
+
+        # 1. 模拟3/2方差（精确NCX2，纯扩散）
+        var_t = self.var_step_ncx2(dt, var_0)
+        # 2. 梯形法计算平均方差
+        avgvar = (var_0 + var_t) / 2
+        # 3. 模拟标的价格的跳部分（论文3.1节）
+        self.jump_size, self.n_jump = self._jump_simulation(dt, n_path)
+
+        return var_t, avgvar
+
+    def joint_fourier_laplace_transform(self, u, l, texp, var_0, X_0):
+        """
+        计算标的对数价格X_T和已实现方差RV_T的联合傅里叶-拉普拉斯变换（论文Proposition4.1）
+        E[exp(iuX_T - l(RV_T - RV_t)) | X_t, V_t]
+        参数：
+            u: 傅里叶变换参数(实数)
+            l: 拉普拉斯变换参数(正实数)
+            texp: 到期时间T-t
+            var_0: 初始方差V_t
+            X_0: 初始对数价格X_t
+        返回：
+            transform_val: 联合变换值
+        """
+        # 论文Proposition4.1的参数计算
+        y = var_0 * (np.exp(self.mr * self.theta * texp) - 1) / (self.mr * self.theta)
+        p = -self.mr + 1j * self.vov * self.rho * u
+        q = l + 0.5 * 1j * u + 0.5 * u**2
+        alpha = -(0.5 - p / self.vov**2) + np.sqrt((0.5 - p / self.vov**2)**2 + 2 * q / self.vov**2)
+        gamma = 2 * (alpha + 1 - p / self.vov**2)
+        # 跳部分的参数a（论文Proposition4.1）
+        a_numer = - (2 * l * self.mu_j**2 - 2 * 1j * self.mu_j * u + self.sigma_j**2 * u**2)
+        a_denom = 2 + 4 * l * self.sigma_j**2
+        a = np.exp(a_numer / a_denom) / np.sqrt(1 + 2 * l * self.sigma_j**2)
+
+        # 合流超几何函数M(α, γ, z)
+        z = -2 / (self.vov**2 * y)
+        hyp = _hyp1f1_vec(alpha, gamma, z)
+        # Gamma函数比值
+        gamma_ratio = spsp.gamma(gamma - alpha) / spsp.gamma(gamma)
+        # 幂项
+        power_term = (2 / (self.vov**2 * y)) ** alpha
+        # 跳的指数项
+        jump_exp = np.exp(self.lam * texp * (a - 1))
+        # 价格的指数项
+        price_exp = np.exp(1j * u * (X_0 + (self.intr - self.lam * self.mu_bar) * texp))
+
+        # 联合变换值
+        transform_val = price_exp * gamma_ratio * power_term * hyp * jump_exp
+        return transform_val
+
+    def char_func_stock(self, u, texp, S0, var_0):
+        """
+        标的股票的特征函数（联合变换中拉普拉斯参数l=0，X_0=ln(S0)）
+        φ(u) = E[exp(iu ln(S_T)) | S0, V0]
+        """
+        X0 = np.log(S0)
+        char_val = self.joint_fourier_laplace_transform(u, l=0.0, texp=texp, var_0=var_0, X_0=X0)
+        return char_val
+
+    def price_stock_option_cosine(self, S0, K, texp, is_call=True):
+        """
+        余弦法（Cosine Method）定价股票欧式期权（论文4节，加速校准）
+        参考论文Fang & Osterlee (2008)，适配带跳3/2模型的特征函数
+        参数：
+            S0: 标的初始价格
+            K: 执行价
+            texp: 到期时间
+            is_call: 是否为认购期权（False为认沽）
+        返回：
+            option_price: 期权价格
+        """
+        var_0 = self.sigma ** 2  # 初始方差=初始波动率平方
+        X0 = np.log(S0)
+        K_log = np.log(K)
+        r = self.intr
+        T = texp
+
+        # 余弦法参数设置（Fang & Osterlee 2008）
+        L = 12  # 积分区间宽度，经验值12足够
+        N = 256  # 余弦级数项数，平衡精度与速度
+        k = np.arange(0, N)
+        u_k = k * np.pi / L
+
+        # 计算特征函数
+        char_vals = self.char_func_stock(u_k, T, S0, var_0)
+        # 余弦法系数
+        c_k = np.zeros(N, dtype=complex)
+        c_k[0] = 0.5 * char_vals[0]
+        c_k[1:] = char_vals[1:] * np.exp(1j * u_k[1:] * L) / (1 + (u_k[1:] / np.pi) ** 2)
+        c_k = np.real(c_k)
+
+        # 计算期权价格
+        price = 0.0
+        for n in range(N):
+            if n == 0:
+                term = np.maximum(X0 + r*T - K_log + L, 0)
+            else:
+                term = (np.sin(n * np.pi * (X0 + r*T - K_log + L) / L) 
+                        - np.sin(n * np.pi * (X0 + r*T - K_log - L) / L)) / (n * np.pi / L)
+            price += c_k[n] * term
+        price = price * np.exp(-r*T) * (2 / L)
+
+        # 认购/认沽转换（平价公式）
+        if not is_call:
+            price = price + K * np.exp(-r*T) - S0 * np.exp(-self.divr*T)
+        return max(price, 0)
+
+    def _g_VIX(self, x, tau):
+        """
+        计算VIX的g(x,τ)函数（论文Proposition5.1：g(x,τ) = -d/dl E[exp(-l∫V_sds)|V_t=x] | l=0）
+        x: 方差V_t
+        tau: VIX的计算窗口（论文5.7节：τ=30/365）
+        """
+        def laplace_V(l):
+            """方差的拉普拉斯变换E[exp(-l∫V_sds)|V_t=x]"""
+            texp = tau
+            y = x * (np.exp(self.mr * self.theta * texp) - 1) / (self.mr * self.theta)
+            p = -self.mr
+            q = l
+            alpha = -(0.5 - p / self.vov**2) + np.sqrt((0.5 - p / self.vov**2)**2 + 2 * q / self.vov**2)
+            gamma = 2 * (alpha + 1 - p / self.vov**2)
+            z = -2 / (self.vov**2 * y)
+            hyp = _hyp1f1_vec(alpha, gamma, z)
+            gamma_ratio = spsp.gamma(gamma - alpha) / spsp.gamma(gamma)
+            power_term = (2 / (self.vov**2 * y)) ** alpha
+            return gamma_ratio * power_term * hyp
+
+        # 对l求一阶导数并在l=0处取值
+        g = -derivative(laplace_V, 0, n=1, dx=1e-5, order=5)
+        return g
+
+    def _vix_distribution(self, texp, var_0):
+        """
+        计算VIX_T的分布（论文Proposition5.1+Lemma5.1：VIX² = g(V_T,τ)/τ * 100² + 2λ(μ̄-μ)）
+        参数：
+            texp: VIX期权到期时间
+            var_0: 初始方差
+        返回：
+            vix_pdf: VIX的概率密度函数（数值）
+            vix_grid: VIX的网格值
+        """
+        tau = 30 / 365  # VIX计算窗口（论文5.7节）
+        # 3/2方差的转移密度（论文Lemma5.1，非中心卡方分布）
+        def v_pdf(y):
+            """V_T的转移密度f_VT|V0(y)"""
+            t = texp
+            c_t = self.vov**2 * (np.exp(self.mr * self.theta * t) - 1) / (4 * self.mr * self.theta)
+            delta = 4 * (self.mr + self.vov**2) / self.vov**2
+            alpha = 1 / (var_0 * c_t)
+            ncx2_pdf = spst.ncx2.pdf(x= y * c_t * np.exp(self.mr * self.theta * t), df=delta, nc=alpha)
+            return ncx2_pdf * np.exp(self.mr * self.theta * t) / (c_t * y**2)
+
+        # VIX与方差的映射（论文Proposition5.1）
+        def vix_from_v(y):
+            g = self._g_VIX(y, tau)
+            vix_sq = (g / tau) * 100**2 + 2 * self.lam * (self.mu_bar - self.mu_j)
+            return np.sqrt(max(vix_sq, 1e-16))
+
+        # 生成VIX网格并计算PDF（数值变换）
+        v_grid = np.linspace(1e-4, 2*self.theta, 1000)  # 方差网格
+        vix_grid = np.array([vix_from_v(y) for y in v_grid])
+        v_pdf_vals = np.array([v_pdf(y) for y in v_grid])
+        # 变量替换求VIX的PDF：f_VIX(v) = f_V(y(v)) * |dy/dv|
+        dy_dv = np.gradient(v_grid, vix_grid)
+        vix_pdf = v_pdf_vals * np.abs(dy_dv)
+        return vix_pdf, vix_grid
+
+    def price_vix_option(self, K, texp, is_call=True):
+        """
+        定价VIX欧式期权（论文Proposition5.2，数值积分）
+        参数：
+            K: VIX期权执行价
+            texp: 到期时间
+            is_call: 是否为认购期权
+        返回：
+            vix_option_price: VIX期权价格
+        """
+        var_0 = self.sigma ** 2
+        r = self.intr
+        tau = 30 / 365
+
+        # 获取VIX的PDF和网格
+        vix_pdf, vix_grid = self._vix_distribution(texp, var_0)
+        # 计算期权收益的期望（数值积分）
+        if is_call:
+            payoff = np.maximum(vix_grid - K, 0)
+        else:
+            payoff = np.maximum(K - vix_grid, 0)
+        # 数值积分计算期望
+        exp_payoff = np.trapz(payoff * vix_pdf, vix_grid)
+        # 折现得到期权价格
+        vix_option_price = np.exp(-r * texp) * exp_payoff
+        return max(vix_option_price, 0)
