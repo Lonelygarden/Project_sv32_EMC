@@ -7,53 +7,110 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment
 from scipy.stats import linregress
 
-def fetch_deribit_trades_robust(start_time_str, end_time_str, currency="BTC"):
-    """带有自动重试和防断流机制的稳定抓取器"""
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+def fetch_deribit_trades_fast(start_time_str, end_time_str, currency="BTC"):
+    """抗压防风控极速抓取器：多线程 + 指数退避机制"""
     start_ts = int(pd.Timestamp(start_time_str).timestamp() * 1000)
     end_ts = int(pd.Timestamp(end_time_str).timestamp() * 1000)
     url = "https://history.deribit.com/api/v2/public/get_last_trades_by_currency_and_time"
     
-    trades = []
-    current_start = start_ts
+    session = requests.Session()
     
-    while current_start < end_ts:
-        params = {
-            "currency": currency,
-            "kind": "option",
-            "start_timestamp": current_start,
-            "end_timestamp": end_ts,
-            "count": 1000,
-        }
+    def fetch_chunk(chunk_start, chunk_end):
+        chunk_trades = []
+        curr_start = chunk_start
         
-        # 增加最多 5 次的重试机制
-        max_retries = 5
-        for attempt in range(max_retries):
-            try:
-                response = requests.get(url, params=params, timeout=10)
-                data = response.json()
-                break # 请求成功，跳出重试循环
-            except Exception as e:
-                print(f"  [网络波动] 抓取失败 ({e}). 第 {attempt+1}/{max_retries} 次重试中...")
-                time.sleep(3) # 遇到阻击，休眠3秒后重试
-        else:
-            print("  [严重错误] 连续5次重试失败，保存已抓取数据并退出本时间段。")
-            break # 放弃当前批次，保留已经拿到手的数据
+        while curr_start < chunk_end:
+            params = {
+                "currency": currency,
+                "kind": "option",
+                "start_timestamp": curr_start,
+                "end_timestamp": chunk_end,
+                "count": 1000,
+                "sorting": "asc"  # 💥 强制正序滚动，防止游标错乱
+            }
             
-        if 'result' not in data or not data['result']['trades']:
-            break
+            success = False
+            # 💥 加入防弹重试机制，最多重试 5 次
+            for attempt in range(5):
+                try:
+                    resp = session.get(url, params=params, timeout=15)
+                    
+                    # 拦截 429 频率限制报错
+                    if resp.status_code == 429:
+                        time.sleep(2 * (attempt + 1)) # 被限制了就多睡一会儿
+                        continue
+                        
+                    resp.raise_for_status() # 拦截 502/504 等服务器网关报错
+                    data = resp.json()
+                    
+                    # 拦截 API 内部的报错体
+                    if 'error' in data:
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                        
+                    success = True
+                    break # 成功拿到数据，跳出重试循环
+                    
+                except Exception as e:
+                    time.sleep(2) # 遇到网络抖动，休眠 2 秒
             
-        batch_trades = data['result']['trades']
-        trades.extend(batch_trades)
+            if not success:
+                print(f"\n  [警告] 时间块 {chunk_start} 连续 5 次请求失败，请检查网络！")
+                break # 该块彻底绝望，只能退出
+
+            batch = data.get('result', {}).get('trades', [])
+            if not batch:
+                break # 这个才是真正的“本区间没有交易了”
+                
+            chunk_trades.extend(batch)
+            
+            # 如果拿到的不够 1000 条，说明这块彻底扫空了
+            if len(batch) < 1000:
+                break 
+                
+            # 否则沿着最后一条的时间戳继续往下推
+            curr_start = batch[-1]['timestamp'] + 1
+            
+        return chunk_trades
+
+    # 将块大小定为 5 分钟 (300,000 毫秒)，减少 HTTP 连接建立次数
+    chunk_size_ms = 300 * 1000 
+    intervals = []
+    c_start = start_ts
+    while c_start < end_ts:
+        c_end = min(c_start + chunk_size_ms, end_ts)
+        intervals.append((c_start, c_end))
+        c_start = c_end
         
-        # 推进时间戳，防止死循环
-        current_start = batch_trades[-1]['timestamp'] + 1
-        print(f"  已成功安全抓取 {len(trades)} 条记录...", end='\r') 
-        time.sleep(0.3) # 保护性限速
+    all_trades = []
+    
+    print(f"  [引擎启动] 划分为 {len(intervals)} 个并发块，安全全速抓取...")
+    
+    # 💥 将 max_workers 降为 4，达到极限效率与不被封 IP 的完美平衡
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(fetch_chunk, s, e): (s, e) for s, e in intervals}
+        
+        completed_count = 0
+        for future in as_completed(futures):
+            completed_count += 1
+            result = future.result()
+            all_trades.extend(result)
+            print(f"  [并发进度] 已完成 {completed_count}/{len(intervals)} 块 (累计获取 {len(all_trades)} 条成交记录)...", end='\r')
             
-    if not trades:
+    print("\n  ✅ 所有任务结束，正在重组与去重...")
+    
+    if not all_trades:
         return pd.DataFrame()
         
-    df = pd.DataFrame(trades)
+    df = pd.DataFrame(all_trades)
+    
+    # 依靠底层 trade_seq 去重，绝对严谨
+    df = df.drop_duplicates(subset=['trade_seq']) 
+    df = df.sort_values('timestamp').reset_index(drop=True)
+    
     df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
     cols = ['datetime', 'instrument_name', 'price', 'amount', 'direction', 'index_price', 'iv']
     return df[[c for c in cols if c in df.columns]]
