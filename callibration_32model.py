@@ -36,7 +36,7 @@ def objective_ms_jump(params, X_array, market_ivs, atm_iv, T):
     # IV 空间 MSE
     return np.mean((model_ivs - market_ivs)**2)
 
-def run_ms_jump_calibration(stage_name, csv_filepath):
+def run_ms_32_jump_calibration(stage_name, csv_filepath):
     print(f"\n[{stage_name}] 启动 Jump-Diffusion 渐近校准...")
     try:
         df = pd.read_csv(csv_filepath)
@@ -105,7 +105,7 @@ def objective_ms_paper(params, X_array, market_ivs, atm_iv):
     mse = np.mean((model_ivs - market_ivs)**2)
     return mse
 
-def run_ms_paper_calibration(stage_name, csv_filepath):
+def run_ms_32_nojump_calibration(stage_name, csv_filepath):
     print(f"\n[{stage_name}] 启动 Medvedev & Scaillet (2007) 渐近校准...")
     try:
         df = pd.read_csv(csv_filepath)
