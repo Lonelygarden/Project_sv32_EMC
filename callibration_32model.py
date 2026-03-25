@@ -98,7 +98,7 @@ def analyze_and_plot_pie_chart(phase_name, csv_filename):
     plt.close(fig)
 
 
-def medvedev_scaillet_32_iv(X_array, atm_iv, vov, rho):
+def medvedev_scaillet_32_no_jump_iv(X_array, atm_iv, vov, rho):
     """
     剥离跳跃后的纯扩散曲率。
     在 T 极小时，它能提供的曲率上限被死死限制住了。
@@ -119,7 +119,7 @@ def objective_ms_no_jump(params, X_array, market_ivs, atm_iv):
     # 物理边界保护
     if vov <= 0.01 or vov > 20.0 or rho < -0.999 or rho > 0.999:
         return 1e10
-    model_ivs = medvedev_scaillet_32_iv(X_array, atm_iv, vov, rho)
+    model_ivs = medvedev_scaillet_32_no_jump_iv(X_array, atm_iv, vov, rho)
     return np.mean((model_ivs - market_ivs)**2)
 
 
@@ -147,7 +147,7 @@ def calibrate_single_dataset_no_jump(csv_filepath):
     
     # 仅需拟合 2 个参数: VoV 和 Rho
     initial_guess = [2.0, -0.5]
-    bounds = [(0.1, 20.0), (-0.99, 0.99)]
+    bounds = [(0.1, 30.0), (-0.99, 0.99)]
     
     res = minimize(
         objective_ms_no_jump, initial_guess, 
@@ -191,7 +191,7 @@ def run_32_model_no_jump_analysis(days: int):
         market_ivs = df_plot['iv'].values / 100.0 if df_plot['iv'].mean() > 5 else df_plot['iv'].values
         
         smooth_X = np.linspace(-0.15, 0.15, 300)
-        model_ivs = medvedev_scaillet_no_jump_iv(
+        model_ivs = medvedev_scaillet_32_no_jump_iv(
             smooth_X, params["atm_iv"], params["vov"], params["rho"]
         )
         

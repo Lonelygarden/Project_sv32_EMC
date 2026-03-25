@@ -10,7 +10,7 @@ import pyfeng as pf
 import pyfeng.ex as pfex
 
 # Feller条件 2*mr*theta > *vov^2
-case_dict = {
+cases_dict = {
     "Case I": {
         "sigma": 1.0,
         "vov": 0.2,
@@ -104,6 +104,87 @@ case_dict = {
     },
 }
 
+situation_dict = {
+    "6D pre-shock": {
+        "sigma": 0.419,
+        "vov": 19.70,
+        "rho": -0.24,
+        "mr": 126.15,
+        "theta": 0.164,
+        "intr": 0.00,
+        "texp": 6.0/365.25,
+        "strike": np.array([96.0, 98.0, 100.0, 102.0, 104.0]),
+        "spot": 100.0,
+        "p_exact": np.array([0.0, 0.0, 0.0, 0.0, 0.0]),
+        "description": "",
+    },
+    "6D during crash":{
+        "sigma": 0.554,
+        "vov": 20.0,
+        "rho": -0.11,
+        "mr": 126.15,
+        "theta": 0.164,
+        "intr": 0.00,
+        "texp": 6.0/365.25,
+        "strike": np.array([96.0, 98.0, 100.0, 102.0, 104.0]),
+        "spot": 100.0,
+        "p_exact": np.array([0.0, 0.0, 0.0, 0.0, 0.0]),
+        "description": "",
+    },
+    "6D recovery":{
+        "sigma": 0.471,
+        "vov": 17.14,
+        "rho": -0.22,
+        "mr": 126.15,
+        "theta": 0.164,
+        "intr": 0.00,
+        "texp": 6.0/365.25,
+        "strike": np.array([96.0, 98.0, 100.0, 102.0, 104.0]),
+        "spot": 100.0,
+        "p_exact": np.array([0.0, 0.0, 0.0, 0.0, 0.0]),
+        "description": "",
+    },
+    "20D pre-shock":{
+        "sigma": 0.40,
+        "vov": 13.26,
+        "rho": -0.24,
+        "mr": 126.15,
+        "theta": 0.164,
+        "intr": 0.00,
+        "texp": 20.3/365.25,
+        "strike": np.array([96.0, 98.0, 100.0, 102.0, 104.0]),
+        "spot": 100.0,
+        "p_exact": np.array([0.0, 0.0, 0.0, 0.0, 0.0]),
+        "description": "",
+    },
+    "20D during crash":{
+        "sigma": 0.487,
+        "vov": 17.6,
+        "rho": -0.25,
+        "mr": 126.15,
+        "theta": 0.164,
+        "intr": 0.00,
+        "texp": 20.3/365.25,
+        "strike": np.array([96.0, 98.0, 100.0, 102.0, 104.0]),
+        "spot": 100.0,
+        "p_exact": np.array([0.0, 0.0, 0.0, 0.0, 0.0]),
+        "description": "",
+    },
+    "20D recovery":{
+        "sigma": 0.422,
+        "vov": 11.97,
+        "rho": -0.19,
+        "mr": 126.15,
+        "theta": 0.164,
+        "intr": 0.00,
+        "texp": 20.3/365.25,
+        "strike": np.array([96.0, 98.0, 100.0, 102.0, 104.0]),
+        "spot": 100.0,
+        "p_exact": np.array([0.0, 0.0, 0.0, 0.0, 0.0]),
+        "description": "",
+    },
+}
+
 class CaseTimer:
     def __init__(self, case_name, case_dict):
         self.case_name = case_name
@@ -118,7 +199,7 @@ class CaseTimer:
         print(f"[{self.case_name}]: {self.case_dict[self.case_name]['description']} \n 运行耗时: {self.interval:.6f} 秒")
         
 
-def run_valuation_single_model(model_class, model_scheme, case_names, case_dict, dt=None):
+def run_valuation_for_single_model(model_class, model_scheme, case_names, case_dict, dt=None):
     print(f"\n{'='*10} 正在运行模型: {model_class.__name__} {'='*10}")
     
     for case_name in case_names:
