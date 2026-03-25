@@ -8,9 +8,23 @@ from openpyxl.styles import Alignment
 from scipy.stats import linregress
 import statsmodels.api as sm
 from statsmodels.iolib.summary2 import summary_col
-
+import os
+import matplotlib.pyplot as plt
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+warnings.filterwarnings("ignore")
+RAW_FILES = {
+    "1_Pre_Shock": "Deribit_RAW_1_Pre_Shock.csv",
+    "2_Crash":     "Deribit_RAW_2_Crash.csv",
+    "3_Recovery":  "Deribit_RAW_3_Recovery.csv"
+}
+
+# 选取流动性最好的20天期限作为核心分析对象
+TARGET_MATURITIES = {
+    "20D": 20.3 / 365.25,
+    "6D": 6 / 365.26
+}
 
 def fetch_deribit_trades_fast(start_time_str, end_time_str, currency="BTC"):
     """多线程 + 指数退避机制"""
@@ -175,6 +189,90 @@ def fetch_dvol_data(end_date_str, days_lookback=180):
     return df
 
 
+def clean_and_split_smart():
+    for stage_name, raw_file in RAW_FILES.items():
+        print(f"\n📂 正在读取并智能提纯: {raw_file}")
+        
+        if not os.path.exists(raw_file):
+            print(f"  ❌ 文件不存在，跳过。")
+            continue
+            
+        df = pd.read_csv(raw_file)
+        
+        # 1. 拆解参数
+        parts = df['instrument_name'].str.split('-', expand=True)
+        df['Expiry_Str'] = parts[1]
+        df['K'] = parts[2].astype(float)
+        df['Type'] = parts[3]
+        
+        # 2. 时间处理
+        # 明确告诉 Pandas，Trade_Time 解析为 UTC 时间
+        df['Trade_Time'] = pd.to_datetime(df['datetime'], format='mixed', utc=True)
+        df['Expiry_Time'] = pd.to_datetime(df['Expiry_Str'], format='%d%b%y').dt.tz_localize('UTC') + pd.Timedelta(hours=8)
+        df['T'] = (df['Expiry_Time'] - df['Trade_Time']).dt.total_seconds() / (365.25 * 24 * 3600)
+        
+        # 3. 聚合去重 (注意这里加入了 Expiry_Str 作为保留字段)
+        df_agg = df.groupby(['instrument_name', 'Expiry_Str']).agg({
+            'index_price': 'mean',
+            'iv': 'mean',
+            'K': 'first',
+            'Type': 'first',
+            'T': 'mean'
+        }).reset_index()
+        
+        # 4. 提取 OTM 虚值期权
+        df_agg['Moneyness'] = df_agg['K'] / df_agg['index_price']
+        cond_call = (df_agg['Type'] == 'C') & (df_agg['Moneyness'] >= 1.0)
+        cond_put = (df_agg['Type'] == 'P') & (df_agg['Moneyness'] <= 1.0)
+        df_otm = df_agg[cond_call | cond_put].copy()
+        
+        if df_otm.empty:
+            print(f"  ⚠️ 没有有效的虚值期权！")
+            continue
+
+        # 💥 核心修复：计算每个【交割日】的平均 T，而不是把微小差异的 T 当作独立的期限
+        expiry_T_mapping = df_otm.groupby('Expiry_Str')['T'].mean()
+        
+        for maturity_label, target_T in TARGET_MATURITIES.items():
+            best_expiry = None
+            min_diff = float('inf')
+            
+            # 遍历每一个交割日 (比如 '31OCT25')
+            for exp_str, t_mean in expiry_T_mapping.items():
+                
+                # 统一放宽截断区间，保留核心交战区 (M 在 0.5 到 2.0 之间)
+                subset = df_otm[(df_otm['Expiry_Str'] == exp_str) & 
+                                (df_otm['Moneyness'] >= 0.5) & 
+                                (df_otm['Moneyness'] <= 2.0)]
+                
+                # 只有样本数 >= 3，我们才认为它能构成一条微笑曲线
+                if len(subset) >= 3:
+                    diff = np.abs(t_mean - target_T)
+                    if diff < min_diff:
+                        min_diff = diff
+                        best_expiry = exp_str
+            
+            if best_expiry is None:
+                print(f"  ⚠️ [{maturity_label}] 失败！没有任何一个期限包含 >= 3 个虚值期权。")
+                pd.DataFrame(columns=['Moneyness', 'Type', 'iv', 'T']).to_csv(f"Deribit_{maturity_label}_{stage_name}.csv", index=False)
+                continue
+                
+            # 提取最终的最佳数据集
+            df_slice = df_otm[(df_otm['Expiry_Str'] == best_expiry) & 
+                              (df_otm['Moneyness'] >= 0.5) & 
+                              (df_otm['Moneyness'] <= 2.0)].copy()
+                
+            df_final = df_slice[['Moneyness', 'Type', 'iv', 'T']].copy()
+            df_final = df_final.sort_values('Moneyness').reset_index(drop=True)
+            
+            output_filename = f"Deribit_{maturity_label}_{stage_name}.csv"
+            df_final.to_csv(output_filename, index=False)
+            
+            actual_days = expiry_T_mapping[best_expiry] * 365.25
+            print(f"  ✅ [{maturity_label}] 导出至: {output_filename}")
+            print(f"     -> 锚定交割日: {best_expiry} | 匹配天数: {actual_days:.2f}天 | 有效样本数: {len(df_final)}")
+
+
 def estimate_32_parameters():
     # 数据读取与预处理（保留你的逻辑）
     df = pd.read_excel("DVOL_data.xlsx")
@@ -223,74 +321,56 @@ def estimate_32_parameters():
     
     return kappa, theta
 
+def liquidity_xray(raw_csv, description=""):
+    print(f"正在透视底层数据: {raw_csv}")
+    df = pd.read_csv(raw_csv)
+    
+    # 拆解参数
+    parts = df['instrument_name'].str.split('-', expand=True)
+    df['Expiry_Str'] = parts[1]
+    df['K'] = parts[2].astype(float)
+    df['Type'] = parts[3]
+    
+    # 明确读取为 UTC 时间
+    df['Trade_Time'] = pd.to_datetime(df['datetime'], format='mixed', utc=True)
+    
+    # 解析交割日，打上 UTC 标签，再加上早上 8 点的固定交割时间
+    df['Expiry_Time'] = pd.to_datetime(df['Expiry_Str'], format='%d%b%y').dt.tz_localize('UTC') + pd.Timedelta(hours=8)
+    
+    # 计算精确的“距离到期天数 (Days to Expiry)”
+    df['T_days'] = (df['Expiry_Time'] - df['Trade_Time']).dt.total_seconds() / (24 * 3600)
+    df['Moneyness'] = df['K'] / df['index_price']
+    
+    # 提取虚值期权 (OTM)
+    cond_call = (df['Type'] == 'C') & (df['Moneyness'] >= 1.0)
+    cond_put = (df['Type'] == 'P') & (df['Moneyness'] <= 1.0)
+    df_otm = df[cond_call | cond_put].copy()
+    
+    # ==========================================
+    # 打印流动性最集中的真实期限
+    # ==========================================
+    print("\n 按有效虚值成交笔数排名:")
+    # 将天数四舍五入为整数
+    top_expiries = df_otm['T_days'].round(0).value_counts().head(5)
+    for t_days, count in top_expiries.items():
+        print(f"   -> 距离到期 {t_days:>5.1f} 天 | 虚值成交量: {count} 笔")
 
-def estimate_heston_parameters():
-    # 1. 数据读取与预处理
-    # 假设 Excel 结构一致，V_t 代表波动率或方差数据
-    df = pd.read_excel("DVOL_data.xlsx")
-    V = df["V_t"].values
+    # ==========================================
+    # 绘制 X-Ray 透视图
+    # ==========================================
+    plt.style.use('seaborn-v0_8-darkgrid')
+    plt.figure(figsize=(12, 6), dpi=120)
     
-    # CIR过程要求 V > 0，处理极小值避免除以0
-    V = np.where(V <= 0, 1e-8, V)
+    # 画出所有的 OTM 散点
+    plt.scatter(df_otm['T_days'], df_otm['Moneyness'], 
+                alpha=0.3, s=15, c='#1f77b4', edgecolor='none')
     
-    if len(V) < 10:
-        print("❌ 数据样本太少，无法回归")
-        return None, None
+    plt.title(f'Deribit OTM Option Trades Distribution, {description}', fontsize=14, fontweight='bold')
+    plt.xlabel('Days to Expiration (T)', fontsize=12)
+    plt.ylabel('Moneyness (K/S)', fontsize=12)
+    plt.axhline(1.0, color='red', linestyle='--', linewidth=1.5, label='ATM (M=1.0)')
     
-    # 2. 构建 Heston (CIR) 回归变量
-    dt = 1.0 / 365.25
-    
-    # 因变量: (V_{t+1} - V_t) / sqrt(V_t)
-    Y = (V[1:] - V[:-1]) / np.sqrt(V[:-1])
-    
-    # 自变量 X1: dt / sqrt(V_t) -> 对应参数 kappa * theta
-    X1 = (1.0 / np.sqrt(V[:-1])) * dt
-    
-    # 自变量 X2: sqrt(V_t) * dt -> 对应参数 -kappa
-    X2 = np.sqrt(V[:-1]) * dt
-    
-    X = pd.DataFrame({
-        "X1 (κθ·dt)": X1, 
-        "X2 (-κ·dt)": X2
-    })
-    
-    # 3. 运行回归 (无截距项，因为模型已完全参数化)
-    model = sm.OLS(Y, X)
-    results = model.fit()
-
-    # 4. 生成 Stata 风格表格
-    print("\n [Heston/CIR] 基础Stata风格回归表")
-    print("="*80)
-    print(results.summary(xname=["X1 (κθ·dt)", "X2 (-κ·dt)"])) 
-    
-    print("\n [Heston/CIR] 精简版回归表")
-    print("="*80)
-    summary = summary_col(
-        [results],
-        stars=True,
-        float_format="%.6f",
-        info_dict={
-            'N': lambda x: f"{int(x.nobs)}",
-            'R²': lambda x: f"{x.rsquared:.4f}",
-            'Adj. R²': lambda x: f"{x.rsquared_adj:.4f}"
-        }
-    )
-    print(summary)
-
-    # 5. 反解参数
-    # 系数 X2 对应 -kappa
-    kappa = -results.params["X2 (-κ·dt)"]
-    # 系数 X1 对应 kappa * theta
-    kappa_theta = results.params["X1 (κθ·dt)"]
-    
-    theta = kappa_theta / kappa if kappa != 0 else np.nan
-    
-    # 额外：估算波动率系数 sigma (残差的标准差)
-    # sigma = np.sqrt(results.mse_resid / dt)
-    
-    print("-" * 30)
-    print(f"📈 估算结果:")
-    print(f"均值回复速度 (kappa): {kappa:.4f}")
-    print(f"长期均值水平 (theta): {theta:.4f}")
-    
-    return kappa, theta
+    # 限制 Y 轴只看核心区，防止极端脏数据拉坏比例
+    plt.ylim(0.5, 2.0)
+    plt.legend()
+    plt.show()
