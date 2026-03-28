@@ -664,8 +664,8 @@ class FourierCosABC(opt.OptABC, abc.ABC):
     Reference: Fang, F., & Oosterlee, C. W. (2008). 
     A novel pricing method for European options based on Fourier-cosine series expansions.
     """
-    n_x = 2**11   # COS 方法收敛极快，通常 256 或 512 个网格点就足够了，不需要 FFT 的 4096
-    L = 24.0     # 积分截断区间 [-L, L]。针对 log(S/F)，12 足够覆盖绝大多数极端的 3/2 模型场景
+    n_x = 2**10   # COS 方法收敛极快，通常 256 或 512 个网格点就足够了，不需要 FFT 的 4096
+    L = 12.0     # 积分截断区间 [-L, L]。针对 log(S/F)，12 足够覆盖绝大多数极端的 3/2 模型场景
 
     @abc.abstractmethod
     def mgf_logprice(self, xx, texp):
