@@ -287,7 +287,7 @@ def estimate_32_parameters():
     Y = (V[1:] - V[:-1]) / (V[:-1] ** 1.5)
     X1 = 1 / (V[:-1] ** 0.5) * dt
     X2 = V[:-1] ** 0.5 * dt
-    X = pd.DataFrame({"X1 (κθ·dt)": X1, "X2 (κ·dt)": X2})
+    X = pd.DataFrame({"X1 (κθ)": X1, "X2 (κ)": X2})
     
     # 运行回归
     model = sm.OLS(Y, X)
@@ -297,7 +297,7 @@ def estimate_32_parameters():
     # 1. 基础版（单模型，完整统计信息）
     print("\n 基础Stata风格回归表（statsmodels原生）")
     print("="*80)
-    print(results.summary(xname=["X1 (κθ·dt)", "X2 (κ·dt)"]))  # 自定义变量名
+    print(results.summary(xname=["X1 (κθ)", "X2 (κ)"]))  # 自定义变量名
     
     # 2. 精简版（仅核心指标，更贴近Stata简洁风格）
     print("\n 精简版回归表")
@@ -315,8 +315,8 @@ def estimate_32_parameters():
     print(summary)
 
     # 反解参数（保留你的逻辑）
-    kappa = -results.params["X2 (κ·dt)"]
-    kappa_theta = results.params["X1 (κθ·dt)"]
+    kappa = -results.params["X2 (κ)"]
+    kappa_theta = results.params["X1 (κθ)"]
     theta = kappa_theta / kappa if kappa != 0 else np.nan
     
     return kappa, theta
@@ -369,7 +369,7 @@ def liquidity_xray(raw_csv, description=""):
     plt.xlabel('Days to Expiration (T)', fontsize=12)
     plt.ylabel('Moneyness (K/S)', fontsize=12)
     plt.axhline(1.0, color='red', linestyle='--', linewidth=1.5, label='ATM (M=1.0)')
-    
+    plt.savefig(f'Deribit_OTM_Option_Trades_Distribution_{description}', bbox_inches='tight')
     # 限制 Y 轴只看核心区，防止极端脏数据拉坏比例
     plt.ylim(0.5, 2.0)
     plt.legend()
