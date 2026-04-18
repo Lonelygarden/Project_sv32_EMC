@@ -163,6 +163,8 @@ def calibrate_single_dataset_no_jump(csv_filepath):
 
 
 def run_32_model_no_jump_analysis(days: int):
+    plt.rcParams['font.family'] = 'Times New Roman'
+    plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
     files = {
         "1. Pre-Shock": f"Deribit_{days}D_1_Pre_Shock.csv",
         "2. Crash":     f"Deribit_{days}D_2_Crash.csv",
@@ -171,7 +173,7 @@ def run_32_model_no_jump_analysis(days: int):
     
     plt.style.use('seaborn-v0_8-whitegrid')
     fig, axes = plt.subplots(1, 3, figsize=(18, 5.5), dpi=150)
-    fig.suptitle(f'Volatility Smile Evolution ({days}-Day Maturity)\nFitted with PURE Diffusion Asymptotics (NO JUMP)', 
+    fig.suptitle(f'Volatility Smile Evolution ({days}-Day Maturity)\nFitted with Pure Diffusion Asymptotics', 
                  fontsize=16, fontweight='bold', y=1.05)
     
     for idx, (stage, filepath) in enumerate(files.items()):
@@ -203,13 +205,14 @@ def run_32_model_no_jump_analysis(days: int):
         
         title_color = 'black'
         ax.set_title(f"{stage}\nATM IV={params['atm_iv']*100:.1f}%\nVoV={params['vov']:.2f}, Rho={params['rho']:.2f}", 
-                     fontsize=14, color=title_color)
+                     fontsize=14, color=title_color,
+                     family='Times New Roman')
         
-        ax.set_xlabel('Log-Moneyness (X)', fontsize=12)
+        ax.set_xlabel('Log-Moneyness (X)', fontsize=12, family='Times New Roman')
         if idx == 0:
-            ax.set_ylabel('Implied Volatility (%)', fontsize=12)
+            ax.set_ylabel('Implied Volatility (%)', fontsize=12, family='Times New Roman')
             
-        ax.legend(loc='best', fontsize=10)
+        ax.legend(loc='best', fontsize=10, prop={'family': 'Times New Roman'})
 
     plt.tight_layout()
     plt.savefig(f'Flash_Crash_{days}D_Evolution_NoJump.png', bbox_inches='tight')

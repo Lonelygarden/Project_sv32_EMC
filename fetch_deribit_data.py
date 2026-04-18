@@ -361,16 +361,21 @@ def liquidity_xray(raw_csv, description=""):
     plt.style.use('seaborn-v0_8-darkgrid')
     plt.figure(figsize=(12, 6), dpi=120)
     
-    # 画出所有的 OTM 散点
+    # 散点
     plt.scatter(df_otm['T_days'], df_otm['Moneyness'], 
                 alpha=0.3, s=15, c='#1f77b4', edgecolor='none')
     
-    plt.title(f'Deribit OTM Option Trades Distribution, {description}', fontsize=14, fontweight='bold')
-    plt.xlabel('Days to Expiration (T)', fontsize=12)
-    plt.ylabel('Moneyness (K/S)', fontsize=12)
+    # 标题、坐标轴、图例全部 Times New Roman
+    plt.title(f'Deribit OTM Option Trades Distribution, {description}', fontsize=14, fontweight='bold', family='Times New Roman')
+    plt.xlabel('Days to Expiration (T)', fontsize=12, family='Times New Roman')
+    plt.ylabel('Moneyness (K/S)', fontsize=12, family='Times New Roman')
     plt.axhline(1.0, color='red', linestyle='--', linewidth=1.5, label='ATM (M=1.0)')
-    plt.savefig(f'Deribit_OTM_Option_Trades_Distribution_{description}', bbox_inches='tight')
-    # 限制 Y 轴只看核心区，防止极端脏数据拉坏比例
+    plt.legend(prop={'family': 'Times New Roman'})  # 图例字体
     plt.ylim(0.5, 2.0)
-    plt.legend()
+    
+    # 刻度字体
+    plt.xticks(fontfamily='Times New Roman')
+    plt.yticks(fontfamily='Times New Roman')
+    
+    plt.savefig(f'Deribit_OTM_Option_Trades_Distribution_{description}', bbox_inches='tight')
     plt.show()
